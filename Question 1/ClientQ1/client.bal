@@ -52,7 +52,7 @@ public function main() returns error? {
     io:println("3. Update an existing asset"); //Mutombo
     io:println("4. View specific asset by tag"); //Patrick
     io:println("5. Delete an asset"); //Mbanga
-    io:println("6. View assets by faculty"); //Murphy
+    io:println("6. View assets by faculty"); //Murphy Sisamu
     io:println("7. Check for overdue maintenance");//Henry
     io:println("8. Manage components"); //Mutombo
     io:println("9. Manage schedules"); //Patrick
