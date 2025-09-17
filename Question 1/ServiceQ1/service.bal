@@ -73,6 +73,18 @@ service /asset_management on new http:Listener(9090) {
         return newAsset;
     }
 
+    //henry------------------------------------------------------------
+       // Get all assets
+    resource function get assets() returns Asset[] {
+        Asset[] allAssets = [];
+        foreach Asset asset in assetsTable {
+            allAssets.push(asset);
+        }
+        return allAssets;
+    }
+
+
+
     // Get assets by faculty
     resource function get assets/faculty/[string faculty]() returns Asset[]|error {
         Asset[] facultyAssets = [];
