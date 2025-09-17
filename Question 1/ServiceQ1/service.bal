@@ -1,5 +1,5 @@
 import ballerina/http;
-//import ballerina/time;
+import ballerina/time;
 
 type Component record {
     string componentId;
@@ -100,5 +100,31 @@ service /asset_management on new http:Listener(9090) {
         }
         return facultyAssets;
     }
-
+ //henry🤔🤔🤔🤔🤔coding is not fun at all-------------
+ 
+     
+    // Returns all assets with maintenance schedules that are overdue
+ resource function get assets/overdue() returns Asset[]|error {
+        Asset[] overdueAssets = [];
+        time:Utc currentTime = time:utcNow();
+        
+        foreach Asset asset in assetsTable {
+            foreach Schedule schedule in asset.schedules {
+                time:Civil|error dueDate = time:civilFromString(schedule.nextDueDate);
+                if (dueDate is time:Civil) {
+                    time:Utc|error dueDateUtc = time:utcFromCivil(dueDate);
+                    if (dueDateUtc is time:Utc) {
+                        decimal diffSeconds = time:utcDiffSeconds(currentTime, dueDateUtc);
+                        if (diffSeconds > 0.0d) {
+                            overdueAssets.push(asset);
+                            break; // No need to check other schedules for this asset
+                        }
+                    }
+                }
+            }
+        }
+        
+ // ...existing code...
+        return overdueAssets;
+    }
 }
