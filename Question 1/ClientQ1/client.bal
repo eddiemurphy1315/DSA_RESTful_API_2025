@@ -96,6 +96,17 @@ function CLI(string cli) returns error? {
             io:println(assetResp.toJsonString());
             io:println("================================================\n");
         }
+
+        //henry----------------------------------------------------------
+        "2" => {
+            Asset[] assets = check client_asset->/assets;
+            io:println("All Assets:");
+            io:println("===========");
+            foreach Asset asset in assets {
+                io:println(asset.toJsonString());
+                io:println("================================================\n");
+            }
+        }
          
         "6" => {
             string faculty = io:readln("Faculty: ");
