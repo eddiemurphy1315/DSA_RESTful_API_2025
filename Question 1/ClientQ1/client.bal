@@ -107,6 +107,13 @@ function CLI(string cli) returns error? {
                 io:println("================================================\n");
             }
         }
+             "4" => {
+            string assetTag = io:readln("Asset Tag: ");
+            Asset asset = check client_asset->/assets/[assetTag];
+            io:println("Asset Details:");
+            io:println(asset.toJsonString());
+        }
+
          
         "6" => {
             string faculty = io:readln("Faculty: ");
@@ -136,6 +143,38 @@ function CLI(string cli) returns error? {
             io:println("Invalid option. Please choose a number between 1-11.");
         }
 
+        "9" => {
+            io:println("Schedule Management");
+            io:println("1. Add schedule");
+            io:println("2. Remove schedule");
+            string choice = io:readln("Choose (1-2): ");
+            
+            if choice == "1" {
+                string assetTag = io:readln("Asset Tag: ");
+                string scheduleId = io:readln("Schedule ID: ");
+                string frequency = io:readln("Frequency (QUARTERLY/YEARLY): ");
+                string nextDueDate = io:readln("Next Due Date (YYYY-MM-DD): ");
+                string description = io:readln("Description: ");
+                
+                Schedule schedule = {
+                    scheduleId: scheduleId,
+                    frequency: frequency,
+                    nextDueDate: nextDueDate,
+                    description: description
+                };
+                
+                Schedule addedSchedule = check client_asset->/assets/[assetTag]/schedules.post(schedule);
+                io:println("Schedule added successfully:");
+                io:println(addedSchedule.toJsonString());
+            } else if choice == "2" {
+                string assetTag = io:readln("Asset Tag: ");
+                string scheduleId = io:readln("Schedule ID to remove: ");
+                
+                Schedule removedSchedule = check client_asset->/assets/[assetTag]/schedules/[scheduleId].delete();
+                io:println("Schedule removed successfully:");
+                io:println(removedSchedule.toJsonString());
+            }
+        }
         
-         }
+    }
 }
