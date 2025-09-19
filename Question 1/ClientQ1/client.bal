@@ -175,6 +175,72 @@ function CLI(string cli) returns error? {
                 io:println(removedSchedule.toJsonString());
             }
         }
-        
+        "10" => {
+            io:println("Work Order Management");
+            io:println("1. Add work order");
+            io:println("2. Update work order status");
+            io:println("3. Add task to work order");
+            string choice = io:readln("Choose (1-3): ");
+            
+            if choice == "1" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string description = io:readln("Description: ");
+                string status = io:readln("Status (OPEN/IN_PROGRESS/CLOSED): ");
+                string dateOpened = io:readln("Date Opened (YYYY-MM-DD): ");
+                
+                WorkOrder workOrder = {
+                    workOrderId: workOrderId,
+                    description: description,
+                    status: status,
+                    dateOpened: dateOpened,
+                    dateClosed: (),
+                    tasks: []
+                };
+                
+                WorkOrder addedWorkOrder = check client_asset->/assets/[assetTag]/workorders.post(workOrder);
+                io:println("Work Order added successfully:");
+                io:println(addedWorkOrder.toJsonString());
+            } else if choice == "2" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string description = io:readln("Description: ");
+                string status = io:readln("New Status (OPEN/IN_PROGRESS/CLOSED): ");
+                string dateOpened = io:readln("Date Opened (YYYY-MM-DD): ");
+                string dateClosed = io:readln("Date Closed (YYYY-MM-DD or leave empty): ");
+                
+                WorkOrder workOrder = {
+                    workOrderId: workOrderId,
+                    description: description,
+                    status: status,
+                    dateOpened: dateOpened,
+                    dateClosed: dateClosed == "" ? () : dateClosed,
+                    tasks: []
+                };
+                
+                WorkOrder updatedWorkOrder = check client_asset->/assets/[assetTag]/workorders/[workOrderId].put(workOrder);
+                io:println("Work Order updated successfully:");
+                io:println(updatedWorkOrder.toJsonString());
+            } else if choice == "3" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string taskId = io:readln("Task ID: ");
+                string description = io:readln("Task Description: ");
+                string status = io:readln("Task Status (PENDING/IN_PROGRESS/COMPLETED): ");
+                
+                Task task = {
+                    taskId: taskId,
+                    description: description,
+                    status: status
+                };
+                
+                Task addedTask = check client_asset->/assets/[assetTag]/workorders/[workOrderId]/tasks.post(task);
+                io:println("Task added successfully:");
+                io:println(addedTask.toJsonString());
+            }
+        }
+        _ => {
+            io:println("Invalid option. Please choose a number between 1-11.");
+        }
     }
 }
