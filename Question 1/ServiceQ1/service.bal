@@ -135,4 +135,86 @@ service /asset_management on new http:Listener(9090) {
  // ...existing code...
         return overdueAssets;
     }
+    //mbanga-workorder-management
+    // Add work order to asset
+    resource function post assets/[string assetTag]/workorders(@http:Payload WorkOrder workOrder) returns WorkOrder|error {
+        Asset? assetOpt = assetsTable[assetTag];
+        if (assetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset asset = assetOpt;
+        asset.workOrders[workOrder.workOrderId] = workOrder;
+        assetsTable.put(asset);
+        return workOrder;
+    }
+
+    // Update work order status
+    resource function put assets/[string assetTag]/workorders/[string workOrderId](@http:Payload WorkOrder updatedWorkOrder) returns WorkOrder|error {
+        Asset? assetOpt = assetsTable[assetTag];
+        if (assetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset asset = assetOpt;
+        if (!asset.workOrders.hasKey(workOrderId)) {
+            return error("Work order not found");
+        }
+        
+        asset.workOrders[workOrderId] = updatedWorkOrder;
+        assetsTable.put(asset);
+        return updatedWorkOrder;
+    }
+
+    // Add task to work order
+    resource function post assets/[string assetTag]/workorders/[string workOrderId]/tasks(@http:Payload Task task) returns Task|error {
+        Asset? assetOpt = assetsTable[assetTag];
+        if (assetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset asset = assetOpt;
+        WorkOrder? workOrderOpt = asset.workOrders[workOrderId];
+        if (workOrderOpt is ()) {
+            return error("Work order not found");
+        }
+        
+        WorkOrder workOrder = workOrderOpt;
+        workOrder.tasks.push(task);
+        asset.workOrders[workOrderId] = workOrder;
+        assetsTable.put(asset);
+        return task;
+    }
+
+    // Remove task from work order
+    resource function delete assets/[string assetTag]/workorders/[string workOrderId]/tasks/[string taskId]() returns Task|error {
+        Asset? assetOpt = assetsTable[assetTag];
+        if (assetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset asset = assetOpt;
+        WorkOrder? workOrderOpt = asset.workOrders[workOrderId];
+        if (workOrderOpt is ()) {
+            return error("Work order not found");
+        }
+        
+        WorkOrder workOrder = workOrderOpt;
+        Task? removedTask = ();
+        
+        foreach int i in 0...workOrder.tasks.length()-1 {
+            if (workOrder.tasks[i].taskId == taskId) {
+                removedTask = workOrder.tasks.remove(i);
+                break;
+            }
+        }
+        
+        if (removedTask is ()) {
+            return error("Task not found");
+        }
+        
+        asset.workOrders[workOrderId] = workOrder;
+        assetsTable.put(asset);
+        return <Task>removedTask;
+    }
 }
