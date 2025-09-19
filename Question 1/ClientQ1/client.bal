@@ -107,6 +107,27 @@ function CLI(string cli) returns error? {
                 io:println("================================================\n");
             }
         }
+"3"   
+// Update an existing asset
+    resource function put assets/[string assetTag](@http:Payload Asset updatedAsset) returns Asset|error {
+        Asset? existingAssetOpt = assetsTable[assetTag];
+        
+        if (existingAssetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset existingAsset = existingAssetOpt;
+        
+        // Update fields
+        existingAsset.name = updatedAsset.name;
+        existingAsset.faculty = updatedAsset.faculty;
+        existingAsset.department = updatedAsset.department;
+        existingAsset.status = updatedAsset.status;
+        existingAsset.acquiredDate = updatedAsset.acquiredDate;
+        
+        assetsTable.put(existingAsset);
+        return existingAsset;
+    }
              "4" => {
             string assetTag = io:readln("Asset Tag: ");
             Asset asset = check client_asset->/assets/[assetTag];
@@ -142,6 +163,36 @@ function CLI(string cli) returns error? {
         _ => {
             io:println("Invalid option. Please choose a number between 1-11.");
         }
+"8"
+            io:println("Component Management");
+            io:println("1. Add component");
+            io:println("2. Remove component");
+            string choice = io:readln("Choose (1-2): ");
+            
+            if choice == "1" {
+                string assetTag = io:readln("Asset Tag: ");
+                string componentId = io:readln("Component ID: ");
+                string name = io:readln("Component Name: ");
+                string description = io:readln("Component Description: ");
+                
+                Component component = {
+                    componentId: componentId,
+                    name: name,
+                    description: description
+                };
+                
+                Component addedComponent = check client_asset->/assets/[assetTag]/components.post(component);
+                io:println("Component added successfully:");
+                io:println(addedComponent.toJsonString());
+            } else if choice == "2" {
+                string assetTag = io:readln("Asset Tag: ");
+                string componentId = io:readln("Component ID to remove: ");
+                
+                Component removedComponent = check client_asset->/assets/[assetTag]/components/[componentId].delete();
+                io:println("Component removed successfully:");
+                io:println(removedComponent.toJsonString());
+            }
+        }
 
         "9" => {
             io:println("Schedule Management");
