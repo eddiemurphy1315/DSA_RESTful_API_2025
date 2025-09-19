@@ -135,6 +135,11 @@ function CLI(string cli) returns error? {
             io:println(asset.toJsonString());
         }
 
+        "5" => {
+            string assetTag = io:readln("Asset Tag to delete: ");
+            Asset removedAsset = check client_asset->/assets/[assetTag].delete();
+            io:println("Removed Asset: " + removedAsset.toJsonString());
+        }
          
         "6" => {
             string faculty = io:readln("Faculty: ");
@@ -226,6 +231,7 @@ function CLI(string cli) returns error? {
                 io:println(removedSchedule.toJsonString());
             }
         }
+
         "10" => {
             io:println("Work Order Management");
             io:println("1. Add work order");
