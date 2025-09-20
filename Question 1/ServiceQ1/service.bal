@@ -137,7 +137,8 @@ service /asset_management on new http:Listener(9090) {
     }
 
 
-    // Add schedule to asset
+    
+ // Add schedule to asset
     resource function post assets/[string assetTag]/schedules(@http:Payload Schedule schedule) returns Schedule|error {
         Asset? assetOpt = assetsTable[assetTag];
         if (assetOpt is ()) {
@@ -166,3 +167,4 @@ service /asset_management on new http:Listener(9090) {
         assetsTable.put(asset);
         return removedSchedule;
     }
+}
