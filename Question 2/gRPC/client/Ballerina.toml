@@ -1,6 +1,6 @@
 [package]
 org = "bigboss_electronics"
-name = "carClient"
+name = "car_rental_client"
 version = "0.1.0"
 distribution = "2201.11.0"
 

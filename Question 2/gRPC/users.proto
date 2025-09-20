@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package car_rental;
+
+// Car Rental Service Definition
+service CarRentalService {
+    // Admin operations
+    rpc add_car(AddCarRequest) returns (AddCarResponse);
+    rpc create_users(stream CreateUserRequest) returns (CreateUsersResponse);
+    rpc update_car(UpdateCarRequest) returns (UpdateCarResponse);
+    rpc remove_car(RemoveCarRequest) returns (RemoveCarResponse);
+    
+    // Customer operations
+    rpc list_available_cars(ListAvailableCarsRequest) returns (stream Car);
+    rpc search_car(SearchCarRequest) returns (SearchCarResponse);
+    rpc add_to_cart(AddToCartRequest) returns (AddToCartResponse);
+    rpc place_reservation(PlaceReservationRequest) returns (PlaceReservationResponse);
+}
+
+// Core entities
+message Car {
+    string plate = 1;           // Unique identifier (number plate)
+    string make = 2;
+    string model = 3;
+    int32 year = 4;
+    double daily_price = 5;
+    int32 mileage = 6;
+    CarStatus status = 7;
+}
+
+message User {
+    string user_id = 1;
+    string name = 2;
+    UserRole role = 3;
+}
+
+message CartItem {
+    string plate = 1;
+    string start_date = 2;
+    string end_date = 3;
+}
+
+message Reservation {
+    string reservation_id = 1;
+    string customer_id = 2;
+    string plate = 3;
+    string start_date = 4;
+    string end_date = 5;
+    double total_price = 6;
+}
+
+// Request messages
+message AddCarRequest {
+    Car car = 1;
+}
+
+message CreateUserRequest {
+    User user = 1;
+}
+
+message UpdateCarRequest {
+    string plate = 1;
+    Car updated_car = 2;
+}
+
+message RemoveCarRequest {
+    string plate = 1;
+}
+
+message ListAvailableCarsRequest {
+    string filter = 1;          // Optional filter like "Toyota" or year
+}
+
+message SearchCarRequest {
+    string plate = 1;
+}
+
+message AddToCartRequest {
+    string customer_id = 1;
+    string plate = 2;
+    string start_date = 3;
+    string end_date = 4;
+}
+
+message PlaceReservationRequest {
+    string customer_id = 1;
+}
+
+// Response messages
+message AddCarResponse {
+    string plate = 1;           // Returns the car's unique ID (plate)
+}
+
+message CreateUsersResponse {
+    string message = 1;
+}
+
+message UpdateCarResponse {
+    string message = 1;
+}
+
+message RemoveCarResponse {
+    repeated Car cars = 1;      // New full list of cars
+}
+
+message SearchCarResponse {
+    Car car = 1;
+    bool is_available = 2;
+}
+
+message AddToCartResponse {
+    string message = 1;
+}
+
+message PlaceReservationResponse {
+    repeated Reservation reservations = 1;
+    double total_price = 2;
+    string message = 3;
+}
+
+// Enums
+enum CarStatus {
+    AVAILABLE = 0;
+    UNAVAILABLE = 1;
+}
+
+enum UserRole {
+    CUSTOMER = 0;
+    ADMIN = 1;
+}

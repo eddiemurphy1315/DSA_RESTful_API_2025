@@ -1,6 +1,6 @@
 [package]
 org = "bigboss_electronics"
-name = "carService"
+name = "service"
 version = "0.1.0"
 distribution = "2201.11.0"
 

@@ -83,7 +83,15 @@ service /asset_management on new http:Listener(9090) {
         return allAssets;
     }
 
-
+    // Delete an asset
+    resource function delete assets/[string assetTag]() returns Asset|error {
+        Asset? asset = assetsTable[assetTag];
+        if (asset is ()) {
+            return error("Asset not found with this tag");
+        }
+        Asset removedAsset = assetsTable.remove(assetTag);
+        return removedAsset;
+    }
 
     // Get assets by faculty
     resource function get assets/faculty/[string faculty]() returns Asset[]|error {
@@ -127,9 +135,9 @@ service /asset_management on new http:Listener(9090) {
  // ...existing code...
         return overdueAssets;
     }
-}
 
- // Add schedule to asset
+
+    // Add schedule to asset
     resource function post assets/[string assetTag]/schedules(@http:Payload Schedule schedule) returns Schedule|error {
         Asset? assetOpt = assetsTable[assetTag];
         if (assetOpt is ()) {

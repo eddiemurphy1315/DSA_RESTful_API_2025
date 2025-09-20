@@ -107,6 +107,27 @@ function CLI(string cli) returns error? {
                 io:println("================================================\n");
             }
         }
+"3"   
+// Update an existing asset
+    resource function put assets/[string assetTag](@http:Payload Asset updatedAsset) returns Asset|error {
+        Asset? existingAssetOpt = assetsTable[assetTag];
+        
+        if (existingAssetOpt is ()) {
+            return error("Asset not found with this tag");
+        }
+        
+        Asset existingAsset = existingAssetOpt;
+        
+        // Update fields
+        existingAsset.name = updatedAsset.name;
+        existingAsset.faculty = updatedAsset.faculty;
+        existingAsset.department = updatedAsset.department;
+        existingAsset.status = updatedAsset.status;
+        existingAsset.acquiredDate = updatedAsset.acquiredDate;
+        
+        assetsTable.put(existingAsset);
+        return existingAsset;
+    }
              "4" => {
             string assetTag = io:readln("Asset Tag: ");
             Asset asset = check client_asset->/assets/[assetTag];
@@ -114,6 +135,11 @@ function CLI(string cli) returns error? {
             io:println(asset.toJsonString());
         }
 
+        "5" => {
+            string assetTag = io:readln("Asset Tag to delete: ");
+            Asset removedAsset = check client_asset->/assets/[assetTag].delete();
+            io:println("Removed Asset: " + removedAsset.toJsonString());
+        }
          
         "6" => {
             string faculty = io:readln("Faculty: ");
@@ -142,6 +168,36 @@ function CLI(string cli) returns error? {
         _ => {
             io:println("Invalid option. Please choose a number between 1-11.");
         }
+"8"
+            io:println("Component Management");
+            io:println("1. Add component");
+            io:println("2. Remove component");
+            string choice = io:readln("Choose (1-2): ");
+            
+            if choice == "1" {
+                string assetTag = io:readln("Asset Tag: ");
+                string componentId = io:readln("Component ID: ");
+                string name = io:readln("Component Name: ");
+                string description = io:readln("Component Description: ");
+                
+                Component component = {
+                    componentId: componentId,
+                    name: name,
+                    description: description
+                };
+                
+                Component addedComponent = check client_asset->/assets/[assetTag]/components.post(component);
+                io:println("Component added successfully:");
+                io:println(addedComponent.toJsonString());
+            } else if choice == "2" {
+                string assetTag = io:readln("Asset Tag: ");
+                string componentId = io:readln("Component ID to remove: ");
+                
+                Component removedComponent = check client_asset->/assets/[assetTag]/components/[componentId].delete();
+                io:println("Component removed successfully:");
+                io:println(removedComponent.toJsonString());
+            }
+        }
 
         "9" => {
             io:println("Schedule Management");
@@ -175,6 +231,73 @@ function CLI(string cli) returns error? {
                 io:println(removedSchedule.toJsonString());
             }
         }
-        
+
+        "10" => {
+            io:println("Work Order Management");
+            io:println("1. Add work order");
+            io:println("2. Update work order status");
+            io:println("3. Add task to work order");
+            string choice = io:readln("Choose (1-3): ");
+            
+            if choice == "1" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string description = io:readln("Description: ");
+                string status = io:readln("Status (OPEN/IN_PROGRESS/CLOSED): ");
+                string dateOpened = io:readln("Date Opened (YYYY-MM-DD): ");
+                
+                WorkOrder workOrder = {
+                    workOrderId: workOrderId,
+                    description: description,
+                    status: status,
+                    dateOpened: dateOpened,
+                    dateClosed: (),
+                    tasks: []
+                };
+                
+                WorkOrder addedWorkOrder = check client_asset->/assets/[assetTag]/workorders.post(workOrder);
+                io:println("Work Order added successfully:");
+                io:println(addedWorkOrder.toJsonString());
+            } else if choice == "2" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string description = io:readln("Description: ");
+                string status = io:readln("New Status (OPEN/IN_PROGRESS/CLOSED): ");
+                string dateOpened = io:readln("Date Opened (YYYY-MM-DD): ");
+                string dateClosed = io:readln("Date Closed (YYYY-MM-DD or leave empty): ");
+                
+                WorkOrder workOrder = {
+                    workOrderId: workOrderId,
+                    description: description,
+                    status: status,
+                    dateOpened: dateOpened,
+                    dateClosed: dateClosed == "" ? () : dateClosed,
+                    tasks: []
+                };
+                
+                WorkOrder updatedWorkOrder = check client_asset->/assets/[assetTag]/workorders/[workOrderId].put(workOrder);
+                io:println("Work Order updated successfully:");
+                io:println(updatedWorkOrder.toJsonString());
+            } else if choice == "3" {
+                string assetTag = io:readln("Asset Tag: ");
+                string workOrderId = io:readln("Work Order ID: ");
+                string taskId = io:readln("Task ID: ");
+                string description = io:readln("Task Description: ");
+                string status = io:readln("Task Status (PENDING/IN_PROGRESS/COMPLETED): ");
+                
+                Task task = {
+                    taskId: taskId,
+                    description: description,
+                    status: status
+                };
+                
+                Task addedTask = check client_asset->/assets/[assetTag]/workorders/[workOrderId]/tasks.post(task);
+                io:println("Task added successfully:");
+                io:println(addedTask.toJsonString());
+            }
+        }
+        _ => {
+            io:println("Invalid option. Please choose a number between 1-11.");
+        }
     }
 }
