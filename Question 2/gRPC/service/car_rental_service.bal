@@ -35,10 +35,45 @@ service "CarRentalService" on ep {
         return {plate: car.plate};
     }
 
-        //Henry
+        //Henry------------------------------
+        //update car details 
     remote function update_car(UpdateCarRequest value) returns UpdateCarResponse|error {
-        
+    string plate = value.plate;
+    Car updatedCar = value.updated_car;
+
+    if plate == "" {
+        return error("Car plate is required for update");
     }
+    if updatedCar.plate == "" || updatedCar.make == "" || updatedCar.model == "" {
+        return error("Updated car must have plate, make, and model");
+    }
+    if !cars.hasKey(plate) {
+        return error("Car with plate " + plate + " not found");
+    }
+    if plate != updatedCar.plate {
+        return error("Plate in request (" + plate + ") does not match updated car's plate (" + updatedCar.plate + ")");
+    }
+    if updatedCar.year < 1900 || updatedCar.year > 2025 {
+        return error("Invalid car year. Must be between 1900 and 2025");
+    }
+    if updatedCar.daily_price < 0.0 {
+        return error("Daily price must be non-negative");
+    }
+    if updatedCar.mileage < 0 {
+        return error("Mileage must be non-negative");
+    }
+    if updatedCar.status != "AVAILABLE" && updatedCar.status != "UNAVAILABLE" && updatedCar.status != "RENTED" {
+        return error("Invalid car status. Must be AVAILABLE, UNAVAILABLE, or RENTED");
+    }
+
+    // Update in system
+    cars[plate] = updatedCar;
+    log:printInfo("Car updated successfully: " + plate);
+
+    //  Only `message` exists in UpdateCarResponse
+    return { message: "Car updated successfully: " + plate };
+}
+
 
     remote function remove_car(RemoveCarRequest value) returns RemoveCarResponse|error {
         //Mbanga
