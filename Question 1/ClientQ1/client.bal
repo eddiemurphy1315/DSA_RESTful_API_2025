@@ -173,10 +173,8 @@ function CLI(string cli) returns error? {
             }
         }
 
-        _ => {
-            io:println("Invalid option. Please choose a number between 1-11.");
-        }
-"8"
+        
+     "8" => {
             io:println("Component Management");
             io:println("1. Add component");
             io:println("2. Remove component");
@@ -204,8 +202,9 @@ function CLI(string cli) returns error? {
                 Component removedComponent = check client_asset->/assets/[assetTag]/components/[componentId].delete();
                 io:println("Component removed successfully:");
                 io:println(removedComponent.toJsonString());
-            }
-        }
+            }
+        }
+        
 
         "9" => {
             io:println("Schedule Management");
