@@ -107,27 +107,35 @@ function CLI(string cli) returns error? {
                 io:println("================================================\n");
             }
         }
-"3"   
-// Update an existing asset
-    resource function put assets/[string assetTag](@http:Payload Asset updatedAsset) returns Asset|error {
-        Asset? existingAssetOpt = assetsTable[assetTag];
-        
-        if (existingAssetOpt is ()) {
-            return error("Asset not found with this tag");
+
+
+       "3" => {
+            string assetTag = io:readln("Asset Tag to update: ");
+            string name = io:readln("New Asset Name: ");
+            string faculty = io:readln("New Faculty: ");
+            string department = io:readln("New Department: ");
+            string status = io:readln("New Status (ACTIVE/UNDER_REPAIR/DISPOSED): ");
+            string acquiredDate = io:readln("New Acquired Date (YYYY-MM-DD): ");
+            
+            Asset updatedAsset = {
+                assetTag: assetTag,
+                name: name,
+                faculty: faculty,
+                department: department,
+                status: status,
+                acquiredDate: acquiredDate,
+                components: {},
+                schedules: {},
+                workOrders: {}
+            };
+            
+            Asset assetResp = check client_asset->/assets/[assetTag].put(updatedAsset);
+            io:println("Asset updated successfully:");
+            io:println(assetResp.toJsonString());
         }
-        
-        Asset existingAsset = existingAssetOpt;
-        
-        // Update fields
-        existingAsset.name = updatedAsset.name;
-        existingAsset.faculty = updatedAsset.faculty;
-        existingAsset.department = updatedAsset.department;
-        existingAsset.status = updatedAsset.status;
-        existingAsset.acquiredDate = updatedAsset.acquiredDate;
-        
-        assetsTable.put(existingAsset);
-        return existingAsset;
-    }
+
+// Update an existing asset
+ 
              "4" => {
             string assetTag = io:readln("Asset Tag: ");
             Asset asset = check client_asset->/assets/[assetTag];
