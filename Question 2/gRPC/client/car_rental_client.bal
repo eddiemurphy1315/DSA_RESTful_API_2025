@@ -7,7 +7,7 @@ public function main() returns error? {
     AddCarResponse add_carResponse = check ep->add_car(add_carRequest);
     io:println(add_carResponse);
 
-    UpdateCarRequest update_carRequest = {plate: "ballerina", updated_car: {plate: "ballerina", make: "ballerina", model: "ballerina", year: 1, daily_price: 1, mileage: 1, status: "AVAILABLE"}};
+    UpdateCarRequest update_carRequest = {plate: "ballerina", updated_car: {plate: "ballerina", make: "ballerina", model: "ballerina", year: 1995, daily_price: 1, mileage: 1, status: "AVAILABLE"}};
     UpdateCarResponse update_carResponse = check ep->update_car(update_carRequest);
     io:println(update_carResponse);
 
