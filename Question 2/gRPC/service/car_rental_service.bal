@@ -97,9 +97,27 @@ service "CarRentalService" on ep {
         return {cars: carList};
     }
 
-    remote function search_car(SearchCarRequest value) returns SearchCarResponse|error {
         //Mutombo
+ remote function search_car(SearchCarRequest value) returns SearchCarResponse|error {
+        string plate = value.plate;
+        
+        // Check if car exists
+        if !cars.hasKey(plate) {
+            return {
+                car: {},
+                is_available: false
+            };
+        }
+        
+        Car car = cars.get(plate);
+        boolean isAvailable = car.status == AVAILABLE;
+        
+        return {
+            car: car,
+            is_available: isAvailable
+        };
     }
+
 
       //Murphy
     remote function add_to_cart(AddToCartRequest value) returns AddToCartResponse|error {
