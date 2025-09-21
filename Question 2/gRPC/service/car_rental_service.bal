@@ -270,11 +270,6 @@ service "CarRentalService" on ep {
         };
     }
 
-    
-
-
-
-
  remote function create_users(stream<CreateUserRequest, grpc:Error?> clientStream) returns CreateUsersResponse|error {
         int userCount = 0;
         
