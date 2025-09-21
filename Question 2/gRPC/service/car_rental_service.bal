@@ -144,9 +144,115 @@ service "CarRentalService" on ep {
         return {message: "Item added to cart successfully"};
     }
 
-    remote function place_reservation(PlaceReservationRequest value) returns PlaceReservationResponse|error {
+   
         //Mutombo
+  remote function add_to_cart(AddToCartRequest value) returns AddToCartResponse|error {
+        string customerId = value.customer_id;
+        string plate = value.plate;
+        string startDate = value.start_date;
+        string endDate = value.end_date;
+        
+        // Validate dates
+        if startDate == "" || endDate == "" {
+            return error("Start date and end date are required");
+        }
+        
+        // Check if car exists and is available
+        if !cars.hasKey(plate) {
+            return error("Car with plate " + plate + " not found");
+        }
+        
+        Car car = cars.get(plate);
+        if car.status != AVAILABLE {
+            return error("Car is not available for rental");
+        }
+        
+        // Create cart item
+        CartItem cartItem = {
+            plate: plate,
+            start_date: startDate,
+            end_date: endDate
+        };
+        
+        // Add to customer's cart
+        if customerCarts.hasKey(customerId) {
+            CartItem[] existingCart = customerCarts.get(customerId);
+            existingCart.push(cartItem);
+            customerCarts[customerId] = existingCart;
+        } else {
+            customerCarts[customerId] = [cartItem];
+        }
+        
+        log:printInfo("Item added to cart for customer: " + customerId);
+        
+        return {message: "Item added to cart successfully"};
     }
+
+    remote function place_reservation(PlaceReservationRequest value) returns PlaceReservationResponse|error {
+        string customerId = value.customer_id;
+        
+        // Check if customer has items in cart
+        if !customerCarts.hasKey(customerId) {
+            return error("No items in cart for customer: " + customerId);
+        }
+        
+        CartItem[] cartItems = customerCarts.get(customerId);
+        if cartItems.length() == 0 {
+            return error("Cart is empty");
+        }
+        
+        Reservation[] createdReservations = [];
+        float totalPrice = 0.0;
+        
+        // Process each cart item
+        foreach CartItem item in cartItems {
+            // Check if car is still available
+            if !cars.hasKey(item.plate) {
+                return error("Car with plate " + item.plate + " no longer exists");
+            }
+            
+            Car car = cars.get(item.plate);
+            if car.status != AVAILABLE {
+                return error("Car " + item.plate + " is no longer available");
+            }
+  // Calculate rental days (simplified - assume 1 day minimum)
+            int rentalDays = 1; // In real implementation, parse dates and calculate difference
+            float itemPrice = car.daily_price * <float>rentalDays;
+            totalPrice += itemPrice;
+            
+            // Create reservation
+            string reservationId = uuid:createType1AsString();
+            Reservation reservation = {
+                reservation_id: reservationId,
+                customer_id: customerId,
+                plate: item.plate,
+                start_date: item.start_date,
+                end_date: item.end_date,
+                total_price: itemPrice
+            };
+            
+            // Store reservation
+            reservations[reservationId] = reservation;
+            createdReservations.push(reservation);
+            
+            // Update car status to rented
+            car.status = UNAVAILABLE;
+            cars[item.plate] = car;
+        }
+        
+        // Clear customer's cart
+        customerCarts[customerId] = [];
+        
+        log:printInfo("Reservations created for customer: " + customerId);
+        
+        return {
+            reservations: createdReservations,
+            total_price: totalPrice,
+            message: "Reservations placed successfully"
+        };
+    }
+
+    
 
 
 
