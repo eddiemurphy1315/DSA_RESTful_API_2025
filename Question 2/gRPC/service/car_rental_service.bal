@@ -148,10 +148,34 @@ service "CarRentalService" on ep {
         //Mutombo
     }
 
-     
-    remote function create_users(stream<CreateUserRequest, grpc:Error?> clientStream) returns CreateUsersResponse|error {
-        //Patrick
+
+
+
+ remote function create_users(stream<CreateUserRequest, grpc:Error?> clientStream) returns CreateUsersResponse|error {
+        int userCount = 0;
+        
+        // Process streaming user requests
+        error? e = clientStream.forEach(function(CreateUserRequest userRequest) {
+            User user = userRequest.user;
+            
+            // Validate user data
+            if user.user_id != "" && user.name != "" {
+                users[user.user_id] = user;
+                userCount += 1;
+                log:printInfo("User created: " + user.user_id);
+            } else {
+                log:printError("Invalid user data received");
+            }
+        });
+        
+        if e is error {
+            return e;
+        }
+        
+        return {message: "Successfully created " + userCount.toString() + " users"};
     }
+     
+
 
      //Murphy
     remote function list_available_cars(ListAvailableCarsRequest value) returns stream<Car, error?>|error {
