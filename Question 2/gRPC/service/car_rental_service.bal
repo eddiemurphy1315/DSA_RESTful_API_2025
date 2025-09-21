@@ -76,7 +76,25 @@ service "CarRentalService" on ep {
 
 
     remote function remove_car(RemoveCarRequest value) returns RemoveCarResponse|error {
-        //Mbanga
+        string plate = value.plate;
+        
+        // Check if car exists
+        if !cars.hasKey(plate) {
+            return error("Car with plate " + plate + " not found");
+        }
+        
+        // Remove car from inventory
+        _ = cars.remove(plate);
+        
+        // Return updated car list
+        Car[] carList = [];
+        foreach Car car in cars {
+            carList.push(car);
+        }
+        
+        log:printInfo("Car removed successfully: " + plate);
+        
+        return {cars: carList};
     }
 
     remote function search_car(SearchCarRequest value) returns SearchCarResponse|error {
