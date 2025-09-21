@@ -97,9 +97,27 @@ service "CarRentalService" on ep {
         return {cars: carList};
     }
 
-    remote function search_car(SearchCarRequest value) returns SearchCarResponse|error {
         //Mutombo
+ remote function search_car(SearchCarRequest value) returns SearchCarResponse|error {
+        string plate = value.plate;
+        
+        // Check if car exists
+        if !cars.hasKey(plate) {
+            return {
+                car: {},
+                is_available: false
+            };
+        }
+        
+        Car car = cars.get(plate);
+        boolean isAvailable = car.status == AVAILABLE;
+        
+        return {
+            car: car,
+            is_available: isAvailable
+        };
     }
+
 
       //Murphy
     remote function add_to_cart(AddToCartRequest value) returns AddToCartResponse|error {
@@ -144,14 +162,139 @@ service "CarRentalService" on ep {
         return {message: "Item added to cart successfully"};
     }
 
-    remote function place_reservation(PlaceReservationRequest value) returns PlaceReservationResponse|error {
+   
         //Mutombo
+  remote function add_to_cart(AddToCartRequest value) returns AddToCartResponse|error {
+        string customerId = value.customer_id;
+        string plate = value.plate;
+        string startDate = value.start_date;
+        string endDate = value.end_date;
+        
+        // Validate dates
+        if startDate == "" || endDate == "" {
+            return error("Start date and end date are required");
+        }
+        
+        // Check if car exists and is available
+        if !cars.hasKey(plate) {
+            return error("Car with plate " + plate + " not found");
+        }
+        
+        Car car = cars.get(plate);
+        if car.status != AVAILABLE {
+            return error("Car is not available for rental");
+        }
+        
+        // Create cart item
+        CartItem cartItem = {
+            plate: plate,
+            start_date: startDate,
+            end_date: endDate
+        };
+        
+        // Add to customer's cart
+        if customerCarts.hasKey(customerId) {
+            CartItem[] existingCart = customerCarts.get(customerId);
+            existingCart.push(cartItem);
+            customerCarts[customerId] = existingCart;
+        } else {
+            customerCarts[customerId] = [cartItem];
+        }
+        
+        log:printInfo("Item added to cart for customer: " + customerId);
+        
+        return {message: "Item added to cart successfully"};
     }
 
-     
-    remote function create_users(stream<CreateUserRequest, grpc:Error?> clientStream) returns CreateUsersResponse|error {
-        //Patrick
+    remote function place_reservation(PlaceReservationRequest value) returns PlaceReservationResponse|error {
+        string customerId = value.customer_id;
+        
+        // Check if customer has items in cart
+        if !customerCarts.hasKey(customerId) {
+            return error("No items in cart for customer: " + customerId);
+        }
+        
+        CartItem[] cartItems = customerCarts.get(customerId);
+        if cartItems.length() == 0 {
+            return error("Cart is empty");
+        }
+        
+        Reservation[] createdReservations = [];
+        float totalPrice = 0.0;
+        
+        // Process each cart item
+        foreach CartItem item in cartItems {
+            // Check if car is still available
+            if !cars.hasKey(item.plate) {
+                return error("Car with plate " + item.plate + " no longer exists");
+            }
+            
+            Car car = cars.get(item.plate);
+            if car.status != AVAILABLE {
+                return error("Car " + item.plate + " is no longer available");
+            }
+  // Calculate rental days (simplified - assume 1 day minimum)
+            int rentalDays = 1; // In real implementation, parse dates and calculate difference
+            float itemPrice = car.daily_price * <float>rentalDays;
+            totalPrice += itemPrice;
+            
+            // Create reservation
+            string reservationId = uuid:createType1AsString();
+            Reservation reservation = {
+                reservation_id: reservationId,
+                customer_id: customerId,
+                plate: item.plate,
+                start_date: item.start_date,
+                end_date: item.end_date,
+                total_price: itemPrice
+            };
+            
+            // Store reservation
+            reservations[reservationId] = reservation;
+            createdReservations.push(reservation);
+            
+            // Update car status to rented
+            car.status = UNAVAILABLE;
+            cars[item.plate] = car;
+        }
+        
+        // Clear customer's cart
+        customerCarts[customerId] = [];
+        
+        log:printInfo("Reservations created for customer: " + customerId);
+        
+        return {
+            reservations: createdReservations,
+            total_price: totalPrice,
+            message: "Reservations placed successfully"
+        };
     }
+
+ remote function create_users(stream<CreateUserRequest, grpc:Error?> clientStream) returns CreateUsersResponse|error {
+        int userCount = 0;
+        
+        // Process streaming user requests
+        error? e = clientStream.forEach(function(CreateUserRequest userRequest) {
+            User user = userRequest.user;
+            
+            // Validate user data
+            if user.user_id != "" && user.name != "" {
+                users[user.user_id] = user;
+                userCount += 1;
+                log:printInfo("User created: " + user.user_id);
+            } else {
+                log:printError("Invalid user data received");
+            }
+        });
+        
+        if e is error {
+            return e;
+        }
+        
+        return {message: "Successfully created " + userCount.toString() + " users"};
+    }
+     
+
 
      //Murphy
     remote function list_available_cars(ListAvailableCarsRequest value) returns stream<Car, error?>|error {
