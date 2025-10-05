@@ -1,4 +1,3 @@
-//Mbanga
 import ballerina/http;
 import ballerina/sql;
 import ballerinax/postgresql;
@@ -7,35 +6,30 @@ import ballerina/log;
 import ballerinax/kafka;
 import ballerina/uuid;
 import ballerina/time;
-import ballerina/lang.runtime;
 
-// Configuration
-configurable string dbHost = ?;
-configurable int dbPort = ?;
-configurable string dbUser = ?;
-configurable string dbPassword = ?;
-configurable string dbName = ?;
-configurable string kafkaBootstrapServers = ?;
+configurable string dbHost = "ticketing-db";
+configurable int dbPort = 5432;
+configurable string dbUser = "ticketing_user";
+configurable string dbPassword = "ticketing_pass";
+configurable string dbName = "ticketing_db";
+configurable string kafkaBootstrapServers = "kafka:29092";
 
-// Database client
-postgresql:Client dbClient = check new (
+final postgresql:Client dbClient = check new (
     host = dbHost,
     port = dbPort,
-    user = dbUser,
+    username = dbUser,
     password = dbPassword,
     database = dbName
 );
 
-// Kafka producer
 kafka:ProducerConfiguration producerConfig = {
     clientId: "ticketing-service-producer",
     acks: "all",
     retryCount: 3
 };
 
-kafka:Producer kafkaProducer = check new (kafkaBootstrapServers, producerConfig);
+final kafka:Producer kafkaProducer = check new (kafkaBootstrapServers, producerConfig);
 
-// Kafka consumer for payment confirmations
 kafka:ConsumerConfiguration consumerConfig = {
     groupId: "ticketing-service-group",
     topics: ["payments-processed", "payments-failed"],
@@ -45,7 +39,6 @@ kafka:ConsumerConfiguration consumerConfig = {
 
 listener kafka:Listener kafkaConsumer = new (kafkaBootstrapServers, consumerConfig);
 
-// Types
 type Ticket record {|
     string id?;
     string user_id;
@@ -69,14 +62,6 @@ type ValidateTicketRequest record {|
     string ticket_id;
 |};
 
-type PaymentEvent record {
-    string payment_id;
-    string ticket_id;
-    string status;
-    decimal amount;
-};
-
-// Initialize database
 function initDatabase() returns error? {
     _ = check dbClient->execute(`
         CREATE TABLE IF NOT EXISTS tickets (
@@ -91,33 +76,27 @@ function initDatabase() returns error? {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `);
-
     log:printInfo("Ticketing database initialized");
 }
 
-// HTTP Service
 service /ticketing on new http:Listener(9092) {
 
-    // Health check
     resource function get health() returns string {
         return "Ticketing Service is running";
     }
 
-    // Purchase ticket
     resource function post purchase(@http:Payload PurchaseTicketRequest purchaseReq) 
             returns json|http:InternalServerError|error {
         
         string ticketId = uuid:createType1AsString();
         string currentTime = time:utcToString(time:utcNow());
         
-        // Create ticket with CREATED status
-        sql:ExecutionResult result = check dbClient->execute(`
+        _ = check dbClient->execute(`
             INSERT INTO tickets (id, user_id, trip_id, ticket_type, status, price, purchase_date)
             VALUES (${ticketId}, ${purchaseReq.user_id}, ${purchaseReq.trip_id}, 
                     ${purchaseReq.ticket_type}, 'CREATED', ${purchaseReq.price}, ${currentTime})
         `);
 
-        // Publish ticket request to Kafka for payment processing
         json ticketRequest = {
             "ticket_id": ticketId,
             "user_id": purchaseReq.user_id,
@@ -132,7 +111,6 @@ service /ticketing on new http:Listener(9092) {
             value: ticketRequest.toJsonString().toBytes()
         });
 
-        // Also publish ticket-created event
         json ticketCreated = {
             "event_type": "ticket_created",
             "ticket_id": ticketId,
@@ -156,7 +134,6 @@ service /ticketing on new http:Listener(9092) {
         };
     }
 
-    // Get ticket by ID
     resource function get tickets/[string ticketId]() 
             returns Ticket|http:NotFound|http:InternalServerError|error {
         
@@ -173,7 +150,6 @@ service /ticketing on new http:Listener(9092) {
         return tickets[0];
     }
 
-    // Get user's tickets
     resource function get users/[string userId]/tickets() 
             returns Ticket[]|http:InternalServerError|error {
         
@@ -185,11 +161,9 @@ service /ticketing on new http:Listener(9092) {
         return tickets;
     }
 
-    // Validate ticket
     resource function post validate(@http:Payload ValidateTicketRequest validateReq) 
             returns json|http:NotFound|http:BadRequest|http:InternalServerError|error {
         
-        // Get ticket
         stream<Ticket, sql:Error?> ticketStream = dbClient->query(
             `SELECT * FROM tickets WHERE id = ${validateReq.ticket_id}`
         );
@@ -202,25 +176,22 @@ service /ticketing on new http:Listener(9092) {
 
         Ticket ticket = tickets[0];
 
-        // Check if ticket is PAID
         if ticket.status != "PAID" {
             return <http:BadRequest>{
                 body: {
-                    "error": "Ticket must be in PAID status to validate. Current status: " + ticket.status
+                    "error": "Ticket must be in PAID status. Current: " + ticket.status
                 }
             };
         }
 
-        // Update ticket to VALIDATED
         string validationTime = time:utcToString(time:utcNow());
         
-        sql:ExecutionResult result = check dbClient->execute(`
+        _ = check dbClient->execute(`
             UPDATE tickets 
             SET status = 'VALIDATED', validation_date = ${validationTime}
             WHERE id = ${validateReq.ticket_id}
         `);
 
-        // Publish validation event
         json validationEvent = {
             "event_type": "ticket_validated",
             "ticket_id": validateReq.ticket_id,
@@ -245,7 +216,6 @@ service /ticketing on new http:Listener(9092) {
         };
     }
 
-    // Get all tickets (for admin)
     resource function get tickets() returns Ticket[]|http:InternalServerError|error {
         stream<Ticket, sql:Error?> ticketStream = dbClient->query(
             `SELECT * FROM tickets ORDER BY created_at DESC LIMIT 100`
@@ -256,9 +226,8 @@ service /ticketing on new http:Listener(9092) {
     }
 }
 
-// Kafka consumer service for payment events
 service on kafkaConsumer {
-    remote function onConsumerRecord(kafka:Caller caller, kafka:ConsumerRecord[] records) returns error? {
+    remote function onConsumerRecord(kafka:ConsumerRecord[] records) returns error? {
         
         foreach kafka:ConsumerRecord kafkaRecord in records {
             byte[] value = kafkaRecord.value;
@@ -268,20 +237,18 @@ service on kafkaConsumer {
             string topic = kafkaRecord.topic;
             
             if topic == "payments-processed" {
-                // Payment successful - update ticket to PAID
                 string ticketId = check paymentEvent.ticket_id;
                 
-                sql:ExecutionResult result = check dbClient->execute(`
+                _ = check dbClient->execute(`
                     UPDATE tickets SET status = 'PAID' WHERE id = ${ticketId}
                 `);
 
                 log:printInfo("Ticket marked as PAID: " + ticketId);
                 
             } else if topic == "payments-failed" {
-                // Payment failed - ticket remains in CREATED status or mark as FAILED
                 string ticketId = check paymentEvent.ticket_id;
                 
-                sql:ExecutionResult result = check dbClient->execute(`
+                _ = check dbClient->execute(`
                     UPDATE tickets SET status = 'PAYMENT_FAILED' WHERE id = ${ticketId}
                 `);
 
@@ -291,12 +258,7 @@ service on kafkaConsumer {
     }
 }
 
-// Main function
 public function main() returns error? {
     check initDatabase();
     log:printInfo("Ticketing Service started on port 9092");
-    log:printInfo("Kafka consumer started for payment events");
-    
-    // Keep the service running
-    runtime:sleep(3600);
 }
