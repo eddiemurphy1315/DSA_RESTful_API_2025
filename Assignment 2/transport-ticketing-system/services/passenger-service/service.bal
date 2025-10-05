@@ -1,40 +1,51 @@
-//Henry
+//henry boss//
 import ballerina/http;
 import ballerina/uuid;
-import ballerinax/mongodb;
+import ballerina/sql;
+import ballerinax/postgresql;
 import ballerina/time;
 import ballerina/log;
+import ballerinax/kafka;
 
-// MongoDB configuration
-configurable string mongoHost = "mongodb";
-configurable int mongoPort = 27017;
-configurable string mongoDatabase = "ticketing_system";
+// Database configuration
+configurable string dbHost = "passenger-db";
+configurable int dbPort = 5432;
+configurable string dbUser = "passenger_user";
+configurable string dbPassword = "passenger_pass";
+configurable string dbName = "passenger_db";
 
-// MongoDB client
-final mongodb:Client mongoClient = check new ({
-    connection: {
-        serverAddress: {
-            host: mongoHost,
-            port: mongoPort
-        }
-    }
+// Kafka configuration
+configurable string kafkaBootstrapServers = "kafka:29092";
+
+// PostgreSQL client
+final postgresql:Client dbClient = check new (
+    host = dbHost,
+    port = dbPort,
+    username = dbUser,
+    password = dbPassword,
+    database = dbName
+);
+
+// Kafka producer for events
+final kafka:Producer kafkaProducer = check new (kafka:DEFAULT_URL, {
+    clientId: "passenger-service-producer",
+    acks: "all",
+    retryCount: 3
 });
 
-// Passenger type definition
+// Type definitions
 type Passenger record {|
-    string _id?;
-    string passengerId;
-    string firstName;
-    string lastName;
+    string passenger_id;
+    string first_name;
+    string last_name;
     string email;
-    string phoneNumber;
-    string passwordHash;
-    string accountStatus; // ACTIVE, SUSPENDED, CLOSED
-    time:Utc createdAt;
-    time:Utc updatedAt;
+    string phone_number;
+    string password_hash;
+    string account_status;
+    time:Civil created_at;
+    time:Civil updated_at;
 |};
 
-// Request/Response types
 type RegisterRequest record {|
     string firstName;
     string lastName;
@@ -84,14 +95,45 @@ type TicketResponse record {|
     string? expiresAt;
 |};
 
-type ErrorResponse record {|
-    string message;
-    string ei_code?;
+type PassengerRegisteredEvent record {|
+    string eventType;
+    string passengerId;
+    string email;
+    string firstName;
+    string lastName;
+    string timestamp;
 |};
 
-// Simple password hashing (in production, use bcrypt or similar)
+// Initialize database schema
+function initDatabase() returns error? {
+    _ = check dbClient->execute(`
+        CREATE TABLE IF NOT EXISTS passengers (
+            id SERIAL PRIMARY KEY,
+            passenger_id VARCHAR(255) UNIQUE NOT NULL,
+            first_name VARCHAR(100) NOT NULL,
+            last_name VARCHAR(100) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            phone_number VARCHAR(20) NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            account_status VARCHAR(20) DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    
+    _ = check dbClient->execute(`
+        CREATE INDEX IF NOT EXISTS idx_passenger_email ON passengers(email)
+    `);
+    
+    _ = check dbClient->execute(`
+        CREATE INDEX IF NOT EXISTS idx_passenger_id ON passengers(passenger_id)
+    `);
+    
+    log:printInfo("Database schema initialized successfully");
+}
+
+// Password hashing (simple version - use bcrypt in production)
 function hashPassword(string password) returns string {
-    // For demo purposes - in production use proper hashing library
     return "hashed_" + password;
 }
 
@@ -99,38 +141,56 @@ function verifyPassword(string password, string hash) returns boolean {
     return hashPassword(password) == hash;
 }
 
-// Generate simple JWT-like token (in production, use proper JWT library)
+// Generate token
 function generateToken(string passengerId) returns string {
     return "token_" + passengerId + "_" + time:utcNow()[0].toString();
 }
 
+// Publish event to Kafka
+function publishEvent(string topic, json event) {
+    do {
+        check kafkaProducer->send({
+            topic: topic,
+            value: event.toJsonString().toBytes()
+        });
+        log:printInfo(string `Event published to ${topic}: ${event.toJsonString()}`);
+    } on fail var e {
+        log:printError("Failed to publish event to Kafka", 'error = e);
+    }
+}
+
+// Service initialization
+function init() returns error? {
+    check initDatabase();
+    log:printInfo("Passenger Service initialized successfully");
+}
+
 // Service listener
-listener http:Listener passengerListener = new (8081);
+listener http:Listener passengerListener = new (9090);
 
 // Passenger Service
 service /api/passengers on passengerListener {
 
-    // Health check endpoint
+    // Health check
     resource function get health() returns json {
         return {
             status: "UP",
             serviceName: "Passenger Service",
-            timestamp: time:utcToString(time:utcNow())
+            timestamp: time:utcToString(time:utcNow()),
+            database: "PostgreSQL",
+            port: 9090
         };
     }
 
     // Register new passenger
     resource function post register(RegisterRequest request) returns http:Created|http:Conflict|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection passengers = check db->getCollection("passengers");
-
             // Check if email already exists
-            map<json> filter = {"email": request.email};
-            stream<Passenger, error?> existingStream = check passengers->find(filter);
-            Passenger[] existing = check from Passenger p in existingStream select p;
-            
-            if existing.length() > 0 {
+            Passenger|sql:Error existingPassenger = dbClient->queryRow(
+                `SELECT * FROM passengers WHERE email = ${request.email}`
+            );
+
+            if existingPassenger is Passenger {
                 return <http:Conflict>{
                     body: {
                         message: "Email already registered"
@@ -140,23 +200,33 @@ service /api/passengers on passengerListener {
 
             // Create new passenger
             string passengerId = uuid:createType1AsString();
-            time:Utc now = time:utcNow();
-            
-            Passenger newPassenger = {
-                passengerId: passengerId,
-                firstName: request.firstName,
-                lastName: request.lastName,
-                email: request.email,
-                phoneNumber: request.phoneNumber,
-                passwordHash: hashPassword(request.password),
-                accountStatus: "ACTIVE",
-                createdAt: now,
-                updatedAt: now
-            };
+            string passwordHash = hashPassword(request.password);
+            time:Civil now = time:utcToCivil(time:utcNow());
 
-            check passengers->insertOne(newPassenger);
+            _ = check dbClient->execute(`
+                INSERT INTO passengers (
+                    passenger_id, first_name, last_name, email, 
+                    phone_number, password_hash, account_status, 
+                    created_at, updated_at
+                ) VALUES (
+                    ${passengerId}, ${request.firstName}, ${request.lastName}, 
+                    ${request.email}, ${request.phoneNumber}, ${passwordHash}, 
+                    'ACTIVE', ${now}, ${now}
+                )
+            `);
 
             log:printInfo(string `New passenger registered: ${passengerId}`);
+
+            // Publish event to Kafka
+            PassengerRegisteredEvent event = {
+                eventType: "PASSENGER_REGISTERED",
+                passengerId: passengerId,
+                email: request.email,
+                firstName: request.firstName,
+                lastName: request.lastName,
+                timestamp: time:utcToString(time:utcNow())
+            };
+            publishEvent("passenger.events", event.toJson());
 
             return <http:Created>{
                 headers: {
@@ -174,7 +244,7 @@ service /api/passengers on passengerListener {
             return <http:InternalServerError>{
                 body: {
                     message: "Registration failed",
-                    ei_code: e.message()
+                    error: e.message()
                 }
             };
         }
@@ -183,26 +253,12 @@ service /api/passengers on passengerListener {
     // Login passenger
     resource function post login(LoginRequest request) returns LoginResponse|http:Unauthorized|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection passengers = check db->getCollection("passengers");
-
-            // Find passenger by email
-            map<json> filter = {"email": request.email};
-            stream<Passenger, error?> passengerStream = check passengers->find(filter);
-            Passenger[] results = check from Passenger p in passengerStream select p;
-
-            if results.length() == 0 {
-                return <http:Unauthorized>{
-                    body: {
-                        message: "Invalid credentials"
-                    }
-                };
-            }
-
-            Passenger passenger = results[0];
+            Passenger passenger = check dbClient->queryRow(
+                `SELECT * FROM passengers WHERE email = ${request.email}`
+            );
 
             // Verify password
-            if !verifyPassword(request.password, passenger.passwordHash) {
+            if !verifyPassword(request.password, passenger.password_hash) {
                 return <http:Unauthorized>{
                     body: {
                         message: "Invalid credentials"
@@ -211,7 +267,7 @@ service /api/passengers on passengerListener {
             }
 
             // Check account status
-            if passenger.accountStatus != "ACTIVE" {
+            if passenger.account_status != "ACTIVE" {
                 return <http:Unauthorized>{
                     body: {
                         message: "Account is not active"
@@ -219,26 +275,39 @@ service /api/passengers on passengerListener {
                 };
             }
 
-            // Generate token
-            string token = generateToken(passenger.passengerId);
+            string token = generateToken(passenger.passenger_id);
+            log:printInfo(string `Passenger logged in: ${passenger.passenger_id}`);
 
-            log:printInfo(string `Passenger logged in: ${passenger.passengerId}`);
+            // Publish login event
+            json loginEvent = {
+                eventType: "PASSENGER_LOGIN",
+                passengerId: passenger.passenger_id,
+                timestamp: time:utcToString(time:utcNow())
+            };
+            publishEvent("passenger.events", loginEvent);
 
             return {
-                passengerId: passenger.passengerId,
+                passengerId: passenger.passenger_id,
                 email: passenger.email,
-                firstName: passenger.firstName,
-                lastName: passenger.lastName,
+                firstName: passenger.first_name,
+                lastName: passenger.last_name,
                 token: token,
                 message: "Login successful"
             };
 
         } on fail var e {
             log:printError("Login failed", 'error = e);
+            if e is sql:NoRowsError {
+                return <http:Unauthorized>{
+                    body: {
+                        message: "Invalid credentials"
+                    }
+                };
+            }
             return <http:InternalServerError>{
                 body: {
                     message: "Login failed",
-                    ei_code: e.message()
+                    error: e.message()
                 }
             };
         }
@@ -247,39 +316,33 @@ service /api/passengers on passengerListener {
     // Get passenger profile
     resource function get [string passengerId]() returns PassengerResponse|http:NotFound|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection passengers = check db->getCollection("passengers");
+            Passenger passenger = check dbClient->queryRow(
+                `SELECT * FROM passengers WHERE passenger_id = ${passengerId}`
+            );
 
-            map<json> filter = {"passengerId": passengerId};
-            stream<Passenger, error?> passengerStream = check passengers->find(filter);
-            Passenger[] results = check from Passenger p in passengerStream select p;
+            return {
+                passengerId: passenger.passenger_id,
+                firstName: passenger.first_name,
+                lastName: passenger.last_name,
+                email: passenger.email,
+                phoneNumber: passenger.phone_number,
+                accountStatus: passenger.account_status,
+                createdAt: passenger.created_at.toString()
+            };
 
-            if results.length() == 0 {
+        } on fail var e {
+            log:printError("Failed to get passenger", 'error = e);
+            if e is sql:NoRowsError {
                 return <http:NotFound>{
                     body: {
                         message: "Passenger not found"
                     }
                 };
             }
-
-            Passenger passenger = results[0];
-
-            return {
-                passengerId: passenger.passengerId,
-                firstName: passenger.firstName,
-                lastName: passenger.lastName,
-                email: passenger.email,
-                phoneNumber: passenger.phoneNumber,
-                accountStatus: passenger.accountStatus,
-                createdAt: time:utcToString(passenger.createdAt)
-            };
-
-        } on fail var e {
-            log:printError("Failed to get passenger", 'error = e);
             return <http:InternalServerError>{
                 body: {
                     message: "Failed to retrieve passenger",
-                    ei_code: e.message()
+                    error: e.message()
                 }
             };
         }
@@ -288,127 +351,128 @@ service /api/passengers on passengerListener {
     // Update passenger account
     resource function put [string passengerId](UpdateAccountRequest request) returns PassengerResponse|http:NotFound|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection passengers = check db->getCollection("passengers");
-
             // Check if passenger exists
-            map<json> filter = {"passengerId": passengerId};
-            stream<Passenger, error?> passengerStream = check passengers->find(filter);
-            Passenger[] results = check from Passenger p in passengerStream select p;
+            Passenger existing = check dbClient->queryRow(
+                `SELECT * FROM passengers WHERE passenger_id = ${passengerId}`
+            );
 
-            if results.length() == 0 {
+            // Build update query
+            string firstName = request.firstName ?: existing.first_name;
+            string lastName = request.lastName ?: existing.last_name;
+            string phoneNumber = request.phoneNumber ?: existing.phone_number;
+            time:Civil now = time:utcToCivil(time:utcNow());
+
+            _ = check dbClient->execute(`
+                UPDATE passengers 
+                SET first_name = ${firstName}, 
+                    last_name = ${lastName}, 
+                    phone_number = ${phoneNumber},
+                    updated_at = ${now}
+                WHERE passenger_id = ${passengerId}
+            `);
+
+            log:printInfo(string `Passenger updated: ${passengerId}`);
+
+            // Fetch updated passenger
+            Passenger updated = check dbClient->queryRow(
+                `SELECT * FROM passengers WHERE passenger_id = ${passengerId}`
+            );
+
+            // Publish update event
+            json updateEvent = {
+                eventType: "PASSENGER_UPDATED",
+                passengerId: passengerId,
+                timestamp: time:utcToString(time:utcNow())
+            };
+            publishEvent("passenger.events", updateEvent);
+
+            return {
+                passengerId: updated.passenger_id,
+                firstName: updated.first_name,
+                lastName: updated.last_name,
+                email: updated.email,
+                phoneNumber: updated.phone_number,
+                accountStatus: updated.account_status,
+                createdAt: updated.created_at.toString()
+            };
+
+        } on fail var e {
+            log:printError("Failed to update passenger", 'error = e);
+            if e is sql:NoRowsError {
                 return <http:NotFound>{
                     body: {
                         message: "Passenger not found"
                     }
                 };
             }
-
-            // Build update document
-            map<json> updateDoc = {
-                "updatedAt": time:utcNow()
-            };
-
-            if request.firstName is string {
-                updateDoc["firstName"] = request.firstName;
-            }
-            if request.lastName is string {
-                updateDoc["lastName"] = request.lastName;
-            }
-            if request.phoneNumber is string {
-                updateDoc["phoneNumber"] = request.phoneNumber;
-            }
-
-            mongodb:Update update = { "$set": updateDoc };
-            mongodb:UpdateResult updateResult = check passengers->updateOne(filter, update);
-
-            log:printInfo(string `Passenger updated: ${passengerId}`);
-
-            // Fetch updated passenger
-            stream<Passenger, error?> updatedStream = check passengers->find(filter);
-            Passenger[] updatedResults = check from Passenger p in updatedStream select p;
-            Passenger updated = updatedResults[0];
-
-            return {
-                passengerId: updated.passengerId,
-                firstName: updated.firstName,
-                lastName: updated.lastName,
-                email: updated.email,
-                phoneNumber: updated.phoneNumber,
-                accountStatus: updated.accountStatus,
-                createdAt: time:utcToString(updated.createdAt)
-            };
-
-        } on fail var e {
-            log:printError("Failed to update passenger", 'error = e);
             return <http:InternalServerError>{
                 body: {
                     message: "Failed to update passenger",
-                    ei_code: e.message()
+                    error: e.message()
                 }
             };
         }
     }
 
     // Get passenger's tickets
-    resource function get [string passengerId]/tickets() returns TicketResponse[]|http:NotFound|http:InternalServerError {
+    resource function get [string passengerId]/tickets() returns TicketResponse[]|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection tickets = check db->getCollection("tickets");
+            stream<record {|
+                string ticket_id;
+                string passenger_id;
+                string ticket_type;
+                string status;
+                decimal price;
+                time:Civil purchased_at;
+                time:Civil? validated_at;
+                time:Civil? expires_at;
+            |}, sql:Error?> ticketStream = dbClient->query(
+                `SELECT ticket_id, passenger_id, ticket_type, status, price, 
+                        purchased_at, validated_at, expires_at 
+                 FROM tickets 
+                 WHERE passenger_id = ${passengerId}
+                 ORDER BY purchased_at DESC`
+            );
 
-            // Find all tickets for this passenger
-            map<json> filter = {"passengerId": passengerId};
-            stream<record {|string ticketId; string passengerId; string ticketType; string status; decimal price; time:Utc purchasedAt; time:Utc? validatedAt; time:Utc? expiresAt;|}, error?> ticketStream = check tickets->find(filter);
-            
-            TicketResponse[] ticketResponses = [];
-            
+            TicketResponse[] tickets = [];
             check from var ticket in ticketStream
                 do {
-                    ticketResponses.push({
-                        ticketId: ticket.ticketId,
-                        passengerId: ticket.passengerId,
-                        ticketType: ticket.ticketType,
+                    tickets.push({
+                        ticketId: ticket.ticket_id,
+                        passengerId: ticket.passenger_id,
+                        ticketType: ticket.ticket_type,
                         status: ticket.status,
                         price: ticket.price,
-                        purchasedAt: time:utcToString(ticket.purchasedAt),
-                        validatedAt: ticket.validatedAt is time:Utc ? time:utcToString(<time:Utc>ticket.validatedAt) : (),
-                        expiresAt: ticket.expiresAt is time:Utc ? time:utcToString(<time:Utc>ticket.expiresAt) : ()
+                        purchasedAt: ticket.purchased_at.toString(),
+                        validatedAt: ticket.validated_at is time:Civil ? 
+                            (<time:Civil>ticket.validated_at).toString() : (),
+                        expiresAt: ticket.expires_at is time:Civil ? 
+                            (<time:Civil>ticket.expires_at).toString() : ()
                     });
                 };
 
-            log:printInfo(string `Retrieved ${ticketResponses.length()} tickets for passenger: ${passengerId}`);
-
-            return ticketResponses;
+            log:printInfo(string `Retrieved ${tickets.length()} tickets for passenger: ${passengerId}`);
+            return tickets;
 
         } on fail var e {
             log:printError("Failed to get tickets", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve tickets",
-                    ei_code: e.message()
-                }
-            };
+            // Return empty array if tickets table doesn't exist yet or no tickets found
+            return [];
         }
     }
 
-    // Delete/Close passenger account
+    // Close passenger account
     resource function delete [string passengerId]() returns http:Ok|http:NotFound|http:InternalServerError {
         do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection passengers = check db->getCollection("passengers");
+            time:Civil now = time:utcToCivil(time:utcNow());
+            
+            sql:ExecutionResult result = check dbClient->execute(`
+                UPDATE passengers 
+                SET account_status = 'CLOSED', updated_at = ${now}
+                WHERE passenger_id = ${passengerId}
+            `);
 
-            // Update status to CLOSED instead of deleting
-            map<json> filter = {"passengerId": passengerId};
-            mongodb:Update update = {
-                "$set": {
-                    "accountStatus": "CLOSED",
-                    "updatedAt": time:utcNow()
-                }
-            };
-
-            mongodb:UpdateResult result = check passengers->updateOne(filter, update);
-
-            if result.modifiedCount == 0 {
+            if result.affectedRowCount == 0 {
                 return <http:NotFound>{
                     body: {
                         message: "Passenger not found"
@@ -417,6 +481,14 @@ service /api/passengers on passengerListener {
             }
 
             log:printInfo(string `Passenger account closed: ${passengerId}`);
+
+            // Publish account closure event
+            json closureEvent = {
+                eventType: "PASSENGER_ACCOUNT_CLOSED",
+                passengerId: passengerId,
+                timestamp: time:utcToString(time:utcNow())
+            };
+            publishEvent("passenger.events", closureEvent);
 
             return <http:Ok>{
                 body: {
@@ -429,7 +501,41 @@ service /api/passengers on passengerListener {
             return <http:InternalServerError>{
                 body: {
                     message: "Failed to close account",
-                    ei_code: e.message()
+                    error: e.message()
+                }
+            };
+        }
+    }
+
+    // Get all passengers (for admin/debugging)
+    resource function get .() returns PassengerResponse[]|http:InternalServerError {
+        do {
+            stream<Passenger, sql:Error?> passengerStream = dbClient->query(
+                `SELECT * FROM passengers ORDER BY created_at DESC LIMIT 100`
+            );
+
+            PassengerResponse[] passengers = [];
+            check from var passenger in passengerStream
+                do {
+                    passengers.push({
+                        passengerId: passenger.passenger_id,
+                        firstName: passenger.first_name,
+                        lastName: passenger.last_name,
+                        email: passenger.email,
+                        phoneNumber: passenger.phone_number,
+                        accountStatus: passenger.account_status,
+                        createdAt: passenger.created_at.toString()
+                    });
+                };
+
+            return passengers;
+
+        } on fail var e {
+            log:printError("Failed to get passengers", 'error = e);
+            return <http:InternalServerError>{
+                body: {
+                    message: "Failed to retrieve passengers",
+                    error: e.message()
                 }
             };
         }
