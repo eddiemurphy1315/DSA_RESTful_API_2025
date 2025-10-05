@@ -1,0 +1,6 @@
+dbHost = "passenger-db"
+dbPort = 5432
+dbUser = "passenger_user"
+dbPassword = "passenger_pass"
+dbName = "passenger_db"
+kafkaBootstrapServers = "kafka:29092"

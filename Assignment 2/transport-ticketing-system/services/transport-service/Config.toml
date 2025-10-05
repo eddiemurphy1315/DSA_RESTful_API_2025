@@ -1,0 +1,6 @@
+dbHost = "transport-db"
+dbPort = 5432
+dbUser = "transport_user"
+dbPassword = "transport_pass"
+dbName = "transport_db"
+kafkaBootstrapServers = "kafka:29092"

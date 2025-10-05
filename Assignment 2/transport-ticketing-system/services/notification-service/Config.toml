@@ -1,0 +1,6 @@
+dbHost = "notification-db"
+dbPort = 5432
+dbUser = "notification_user"
+dbPassword = "notification_pass"
+dbName = "notification_db"
+kafkaBootstrapServers = "kafka:29092"

@@ -1,0 +1,6 @@
+dbHost = "ticketing-db"
+dbPort = 5432
+dbUser = "ticketing_user"
+dbPassword = "ticketing_pass"
+dbName = "ticketing_db"
+kafkaBootstrapServers = "kafka:29092"

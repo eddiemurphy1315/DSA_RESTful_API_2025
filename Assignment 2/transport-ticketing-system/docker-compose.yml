@@ -1,0 +1,345 @@
+version: '3.8'
+
+services:
+  # Zookeeper - Required for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - ticketing-network
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    restart: unless-stopped
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - ticketing-network
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # PostgreSQL for Passenger Service
+  passenger-db:
+    image: postgres:15-alpine
+    container_name: passenger-db
+    environment:
+      POSTGRES_USER: passenger_user
+      POSTGRES_PASSWORD: passenger_pass
+      POSTGRES_DB: passenger_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - passenger-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U passenger_user -d passenger_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Transport Service
+  transport-db:
+    image: postgres:15-alpine
+    container_name: transport-db
+    environment:
+      POSTGRES_USER: transport_user
+      POSTGRES_PASSWORD: transport_pass
+      POSTGRES_DB: transport_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - transport-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transport_user -d transport_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Ticketing Service
+  ticketing-db:
+    image: postgres:15-alpine
+    container_name: ticketing-db
+    environment:
+      POSTGRES_USER: ticketing_user
+      POSTGRES_PASSWORD: ticketing_pass
+      POSTGRES_DB: ticketing_db
+    ports:
+      - "5434:5432"
+    volumes:
+      - ticketing-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticketing_user -d ticketing_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Payment Service
+  payment-db:
+    image: postgres:15-alpine
+    container_name: payment-db
+    environment:
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_pass
+      POSTGRES_DB: payment_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - payment-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d payment_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Notification Service
+  notification-db:
+    image: postgres:15-alpine
+    container_name: notification-db
+    environment:
+      POSTGRES_USER: notification_user
+      POSTGRES_PASSWORD: notification_pass
+      POSTGRES_DB: notification_db
+    ports:
+      - "5436:5432"
+    volumes:
+      - notification-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_user -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgreSQL for Admin Service
+  admin-db:
+    image: postgres:15-alpine
+    container_name: admin-db
+    environment:
+      POSTGRES_USER: admin_user
+      POSTGRES_PASSWORD: admin_pass
+      POSTGRES_DB: admin_db
+    ports:
+      - "5437:5432"
+    volumes:
+      - admin-db-data:/var/lib/postgresql/data
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_user -d admin_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Passenger Service
+  passenger-service:
+    build: 
+      context: ./services/passenger-service
+      dockerfile: Dockerfile
+    container_name: passenger-service
+    ports:
+      - "9090:9090"
+    environment:
+      dbHost: passenger-db
+      dbPort: 5432
+      dbUser: passenger_user
+      dbPassword: passenger_pass
+      dbName: passenger_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      passenger-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+  # Transport Service
+  transport-service:
+    build:
+      context: ./services/transport-service
+      dockerfile: Dockerfile
+    container_name: transport-service
+    ports:
+      - "9091:9091"
+    environment:
+      dbHost: transport-db
+      dbPort: 5432
+      dbUser: transport_user
+      dbPassword: transport_pass
+      dbName: transport_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      transport-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+  # Ticketing Service
+  ticketing-service:
+    build:
+      context: ./services/ticketing-service
+      dockerfile: Dockerfile
+    container_name: ticketing-service
+    ports:
+      - "9092:9092"
+    environment:
+      dbHost: ticketing-db
+      dbPort: 5432
+      dbUser: ticketing_user
+      dbPassword: ticketing_pass
+      dbName: ticketing_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      ticketing-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+  # Payment Service
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: Dockerfile
+    container_name: payment-service
+    ports:
+      - "9093:9093"
+    environment:
+      dbHost: payment-db
+      dbPort: 5432
+      dbUser: payment_user
+      dbPassword: payment_pass
+      dbName: payment_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      payment-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    ports:
+      - "9094:9094"
+    environment:
+      dbHost: notification-db
+      dbPort: 5432
+      dbUser: notification_user
+      dbPassword: notification_pass
+      dbName: notification_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      notification-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+  # Admin Service
+  admin-service:
+    build:
+      context: ./services/admin-service
+      dockerfile: Dockerfile
+    container_name: admin-service
+    ports:
+      - "9095:9095"
+    environment:
+      dbHost: admin-db
+      dbPort: 5432
+      dbUser: admin_user
+      dbPassword: admin_pass
+      dbName: admin_db
+      kafkaBootstrapServers: kafka:29092
+    depends_on:
+      admin-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      passenger-service:
+        condition: service_started
+      transport-service:
+        condition: service_started
+      ticketing-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+      notification-service:
+        condition: service_started
+    networks:
+      - ticketing-network
+    restart: unless-stopped
+
+networks:
+  ticketing-network:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  passenger-db-data:
+  transport-db-data:
+  ticketing-db-data:
+  payment-db-data:
+  notification-db-data:
+  admin-db-data:

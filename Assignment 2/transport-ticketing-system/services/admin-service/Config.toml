@@ -1,0 +1,6 @@
+dbHost = "admin-db"
+dbPort = 5432
+dbUser = "admin_user"
+dbPassword = "admin_pass"
+dbName = "admin_db"
+kafkaBootstrapServers = "kafka:29092"
