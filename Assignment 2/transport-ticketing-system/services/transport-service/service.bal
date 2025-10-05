@@ -1,866 +1,251 @@
 import ballerina/http;
+import ballerina/sql;
+import ballerinax/postgresql;
+import ballerinax/postgresql.driver as _;
 import ballerina/log;
-import ballerinax/mongodb;
+import ballerinax/kafka;
 import ballerina/uuid;
 import ballerina/time;
-import ballerinax/kafka;
 
+// Configuration
+configurable string dbHost = ?;
+configurable int dbPort = ?;
+configurable string dbUser = ?;
+configurable string dbPassword = ?;
+configurable string dbName = ?;
+configurable string kafkaBootstrapServers = ?;
 
-configurable string mongoHost = "mongodb";
-configurable int mongoPort = 27017;
-configurable string mongoDatabase = "ticketing_system";
+// Database client
+postgresql:Client dbClient = check new (
+    host = dbHost,
+    port = dbPort,
+    user = dbUser,
+    password = dbPassword,
+    database = dbName
+);
 
-
-configurable string kafkaBootstrap = "kafka:9092";
-
-
-final mongodb:Client mongoClient = check new ({
-    connection: {
-        serverAddress: {
-            host: mongoHost,
-            port: mongoPort
-        }
-    }
-});
-
-
+// Kafka producer
 kafka:ProducerConfiguration producerConfig = {
     clientId: "transport-service-producer",
     acks: "all",
     retryCount: 3
 };
 
-final kafka:Producer kafkaProducer = check new (kafkaBootstrap, producerConfig);
+kafka:Producer kafkaProducer = check new (kafkaBootstrapServers, producerConfig);
 
-
+// Types
 type Route record {|
-    string _id?;
-    string routeId;
-    string routeName;
-    string vehicleType; 
-    string startLocation;
-    string endLocation;
-    string[] stops;
-    decimal distanceKm;
-    boolean isActive;
-    time:Utc createdAt;
-    time:Utc updatedAt;
+    string id?;
+    string name;
+    string transport_type;
+    string stops;
+    string created_at?;
 |};
-
 
 type Trip record {|
-    string _id?;
-    string tripId;
-    string routeId;
-    time:Utc departureTime;
-    time:Utc arrivalTime;
-    string status; // "SCHEDULED", "ACTIVE", "COMPLETED", "CANCELLED", "DELAYED"
-    int availableSeats;
-    int totalSeats;
-    decimal baseFare;
-    time:Utc createdAt;
-    time:Utc updatedAt;
+    string id?;
+    string route_id;
+    string departure_time;
+    string arrival_time;
+    string status;
+    int available_seats;
+    string created_at?;
 |};
 
-
 type CreateRouteRequest record {|
-    string routeName;
-    string vehicleType;
-    string startLocation;
-    string endLocation;
-    string[] stops;
-    decimal distanceKm;
+    string name;
+    string transport_type;
+    string stops;
 |};
 
 type CreateTripRequest record {|
-    string routeId;
-    string departureTime; 
-    string arrivalTime; 
-    int totalSeats;
-    decimal baseFare;
+    string route_id;
+    string departure_time;
+    string arrival_time;
+    int available_seats;
 |};
 
 type UpdateTripStatusRequest record {|
     string status;
-    string? reason;
 |};
 
-type UpdateRouteRequest record {|
-    string? routeName;
-    boolean? isActive;
-    string[]? stops;
-|};
+// Initialize database
+function initDatabase() returns error? {
+    _ = check dbClient->execute(`
+        CREATE TABLE IF NOT EXISTS routes (
+            id VARCHAR(255) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            transport_type VARCHAR(50) NOT NULL,
+            stops TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
-type RouteResponse record {|
-    string routeId;
-    string routeName;
-    string vehicleType;
-    string startLocation;
-    string endLocation;
-    string[] stops;
-    decimal distanceKm;
-    boolean isActive;
-    string createdAt;
-    string updatedAt;
-|};
+    _ = check dbClient->execute(`
+        CREATE TABLE IF NOT EXISTS trips (
+            id VARCHAR(255) PRIMARY KEY,
+            route_id VARCHAR(255) NOT NULL,
+            departure_time VARCHAR(255) NOT NULL,
+            arrival_time VARCHAR(255) NOT NULL,
+            status VARCHAR(50) NOT NULL DEFAULT 'scheduled',
+            available_seats INT DEFAULT 50,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
 
-type TripResponse record {|
-    string tripId;
-    string routeId;
-    string departureTime;
-    string arrivalTime;
-    string status;
-    int availableSeats;
-    int totalSeats;
-    decimal baseFare;
-    string createdAt;
-    RouteInfo? routeInfo;
-|};
+    log:printInfo("Transport database initialized");
+}
 
-type RouteInfo record {|
-    string routeName;
-    string vehicleType;
-    string startLocation;
-    string endLocation;
-    string[] stops;
-|};
+// HTTP Service
+service /transport on new http:Listener(9091) {
 
-type ScheduleUpdateEvent record {|
-    string eventId;
-    string eventType; // "TRIP_CANCELLED", "TRIP_DELAYED", "TRIP_RESCHEDULED"
-    string tripId;
-    string routeId;
-    string message;
-    string timestamp;
-|};
+    // Health check
+    resource function get health() returns string {
+        return "Transport Service is running";
+    }
 
-type ErrorResponse record {|
-    string message;
-    string ei_code?;
-|};
+    // Create new route
+    resource function post routes(@http:Payload CreateRouteRequest routeReq) 
+            returns http:Created|http:InternalServerError|error {
+        
+        string routeId = uuid:createType1AsString();
+        
+        sql:ExecutionResult result = check dbClient->execute(`
+            INSERT INTO routes (id, name, transport_type, stops)
+            VALUES (${routeId}, ${routeReq.name}, ${routeReq.transport_type}, ${routeReq.stops})
+        `);
 
+        log:printInfo("Route created: " + routeReq.name);
+        
+        return http:CREATED;
+    }
 
-listener http:Listener transportListener = new (8082);
+    // Get all routes
+    resource function get routes() returns Route[]|http:InternalServerError|error {
+        stream<Route, sql:Error?> routeStream = dbClient->query(SELECT * FROM routes);
+        Route[] routes = check from Route route in routeStream select route;
+        return routes;
+    }
 
+    // Get route by ID
+    resource function get routes/[string routeId]() 
+            returns Route|http:NotFound|http:InternalServerError|error {
+        
+        stream<Route, sql:Error?> routeStream = dbClient->query(
+            SELECT * FROM routes WHERE id = ${routeId}
+        );
+        
+        Route[] routes = check from Route route in routeStream select route;
+        
+        if routes.length() == 0 {
+            return http:NOT_FOUND;
+        }
 
-service /api/transport on transportListener {
+        return routes[0];
+    }
 
-    
-    resource function get health() returns json {
-        return {
-            status: "UP",
-            serviceName: "Transport Service",
-            timestamp: time:utcToString(time:utcNow())
+    // Create new trip
+    resource function post trips(@http:Payload CreateTripRequest tripReq) 
+            returns http:Created|http:InternalServerError|error {
+        
+        string tripId = uuid:createType1AsString();
+        
+        sql:ExecutionResult result = check dbClient->execute(`
+            INSERT INTO trips (id, route_id, departure_time, arrival_time, available_seats, status)
+            VALUES (${tripId}, ${tripReq.route_id}, ${tripReq.departure_time}, 
+                    ${tripReq.arrival_time}, ${tripReq.available_seats}, 'scheduled')
+        `);
+
+        // Publish schedule update event
+        json scheduleEvent = {
+            "event_type": "trip_created",
+            "trip_id": tripId,
+            "route_id": tripReq.route_id,
+            "departure_time": tripReq.departure_time,
+            "arrival_time": tripReq.arrival_time,
+            "available_seats": tripReq.available_seats,
+            "timestamp": time:utcNow()
         };
+
+        check kafkaProducer->send({
+            topic: "schedule-updates",
+            value: scheduleEvent.toJsonString().toBytes()
+        });
+
+        log:printInfo("Trip created for route: " + tripReq.route_id);
+        
+        return http:CREATED;
     }
 
-    // ==================== ROUTE MANAGEMENT ====================
+    // Get all trips
+    resource function get trips() returns Trip[]|http:InternalServerError|error {
+        stream<Trip, sql:Error?> tripStream = dbClient->query(SELECT * FROM trips ORDER BY departure_time);
+        Trip[] trips = check from Trip trip in tripStream select trip;
+        return trips;
+    }
 
-    
-    resource function post routes(CreateRouteRequest request) returns http:Created|http:BadRequest|http:InternalServerError {
-        do {
-            
-            if request.vehicleType != "bus" && request.vehicleType != "train" {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Invalid vehicle type. Must be 'bus' or 'train'"
-                    }
-                };
-            }
-
-            
-            if request.stops.length() < 2 {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Route must have at least 2 stops"
-                    }
-                };
-            }
-
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection routes = check db->getCollection("routes");
-
-            string routeId = uuid:createType1AsString();
-            time:Utc now = time:utcNow();
-
-            Route newRoute = {
-                routeId: routeId,
-                routeName: request.routeName,
-                vehicleType: request.vehicleType,
-                startLocation: request.startLocation,
-                endLocation: request.endLocation,
-                stops: request.stops,
-                distanceKm: request.distanceKm,
-                isActive: true,
-                createdAt: now,
-                updatedAt: now
-            };
-
-            check routes->insertOne(newRoute);
-
-            log:printInfo(string `Route created: ${request.routeName} (${routeId})`);
-
-            return <http:Created>{
-                headers: {
-                    "Location": string `/api/transport/routes/${routeId}`
-                },
-                body: {
-                    message: "Route created successfully",
-                    routeId: routeId,
-                    routeName: request.routeName
-                }
-            };
-
-        } on fail var e {
-            log:printError("Failed to create route", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to create route",
-                    ei_code: e.message()
-                }
-            };
+    // Get trip by ID
+    resource function get trips/[string tripId]() 
+            returns Trip|http:NotFound|http:InternalServerError|error {
+        
+        stream<Trip, sql:Error?> tripStream = dbClient->query(
+            SELECT * FROM trips WHERE id = ${tripId}
+        );
+        
+        Trip[] trips = check from Trip trip in tripStream select trip;
+        
+        if trips.length() == 0 {
+            return http:NOT_FOUND;
         }
+
+        return trips[0];
     }
 
-    
-    resource function get routes(string? vehicleType = (), boolean? activeOnly = true) returns RouteResponse[]|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection routes = check db->getCollection("routes");
+    // Update trip status
+    resource function put trips/[string tripId]/status(@http:Payload UpdateTripStatusRequest statusReq) 
+            returns http:Ok|http:NotFound|http:InternalServerError|error {
+        
+        sql:ExecutionResult result = check dbClient->execute(`
+            UPDATE trips SET status = ${statusReq.status} WHERE id = ${tripId}
+        `);
 
-            map<json> filter = {};
-
-          
-            if activeOnly == true {
-                filter["isActive"] = true;
-            }
-
-            
-            if vehicleType is string {
-                if vehicleType != "bus" && vehicleType != "train" {
-                    filter["vehicleType"] = "invalid"; // Will return empty array
-                } else {
-                    filter["vehicleType"] = vehicleType;
-                }
-            }
-
-            stream<Route, error?> routeStream = check routes->find(filter);
-            RouteResponse[] routeResponses = [];
-
-            check from Route route in routeStream
-                do {
-                    routeResponses.push({
-                        routeId: route.routeId,
-                        routeName: route.routeName,
-                        vehicleType: route.vehicleType,
-                        startLocation: route.startLocation,
-                        endLocation: route.endLocation,
-                        stops: route.stops,
-                        distanceKm: route.distanceKm,
-                        isActive: route.isActive,
-                        createdAt: time:utcToString(route.createdAt),
-                        updatedAt: time:utcToString(route.updatedAt)
-                    });
-                };
-
-            log:printInfo(string `Retrieved ${routeResponses.length()} routes`);
-
-            return routeResponses;
-
-        } on fail var e {
-            log:printError("Failed to get routes", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve routes",
-                    ei_code: e.message()
-                }
-            };
+        if result.affectedRowCount == 0 {
+            return http:NOT_FOUND;
         }
+
+        // Publish schedule update event
+        json updateEvent = {
+            "event_type": "trip_status_updated",
+            "trip_id": tripId,
+            "new_status": statusReq.status,
+            "timestamp": time:utcNow()
+        };
+
+        check kafkaProducer->send({
+            topic: "schedule-updates",
+            value: updateEvent.toJsonString().toBytes()
+        });
+
+        log:printInfo("Trip status updated: " + tripId + " -> " + statusReq.status);
+        
+        return http:OK;
     }
 
-    
-    resource function get routes/[string routeId]() returns RouteResponse|http:NotFound|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection routes = check db->getCollection("routes");
-
-            map<json> filter = {"routeId": routeId};
-            stream<Route, error?> routeStream = check routes->find(filter);
-            Route[] results = check from Route r in routeStream select r;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Route not found",
-                        routeId: routeId
-                    }
-                };
-            }
-
-            Route route = results[0];
-
-            return {
-                routeId: route.routeId,
-                routeName: route.routeName,
-                vehicleType: route.vehicleType,
-                startLocation: route.startLocation,
-                endLocation: route.endLocation,
-                stops: route.stops,
-                distanceKm: route.distanceKm,
-                isActive: route.isActive,
-                createdAt: time:utcToString(route.createdAt),
-                updatedAt: time:utcToString(route.updatedAt)
-            };
-
-        } on fail var e {
-            log:printError("Failed to get route", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve route",
-                    ei_code: e.message()
-                }
-            };
-        }
+    // Get trips by route
+    resource function get routes/[string routeId]/trips() 
+            returns Trip[]|http:InternalServerError|error {
+        
+        stream<Trip, sql:Error?> tripStream = dbClient->query(
+            SELECT * FROM trips WHERE route_id = ${routeId} ORDER BY departure_time
+        );
+        
+        Trip[] trips = check from Trip trip in tripStream select trip;
+        return trips;
     }
-
-    
-    resource function put routes/[string routeId](UpdateRouteRequest request) returns RouteResponse|http:NotFound|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection routes = check db->getCollection("routes");
-
-            
-            map<json> filter = {"routeId": routeId};
-            stream<Route, error?> routeStream = check routes->find(filter);
-            Route[] results = check from Route r in routeStream select r;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Route not found",
-                        routeId: routeId
-                    }
-                };
-            }
-
-            
-            map<json> updateDoc = {
-                "updatedAt": time:utcNow()
-            };
-
-            if request.routeName is string {
-                updateDoc["routeName"] = request.routeName;
-            }
-            if request.isActive is boolean {
-                updateDoc["isActive"] = request.isActive;
-            }
-            if request.stops is string[] {
-                updateDoc["stops"] = request.stops;
-            }
-
-            mongodb:Update update = {"$set": updateDoc};
-            mongodb:UpdateResult updateResult = check routes->updateOne(filter, update);
-
-            log:printInfo(string `Route updated: ${routeId}`);
-
-            
-            stream<Route, error?> updatedStream = check routes->find(filter);
-            Route[] updatedResults = check from Route r in updatedStream select r;
-            Route updated = updatedResults[0];
-
-            return {
-                routeId: updated.routeId,
-                routeName: updated.routeName,
-                vehicleType: updated.vehicleType,
-                startLocation: updated.startLocation,
-                endLocation: updated.endLocation,
-                stops: updated.stops,
-                distanceKm: updated.distanceKm,
-                isActive: updated.isActive,
-                createdAt: time:utcToString(updated.createdAt),
-                updatedAt: time:utcToString(updated.updatedAt)
-            };
-
-        } on fail var e {
-            log:printError("Failed to update route", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to update route",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    // ==================== TRIP MANAGEMENT ====================
-
-    
-    resource function post trips(CreateTripRequest request) returns http:Created|http:BadRequest|http:NotFound|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-            mongodb:Collection routes = check db->getCollection("routes");
-
-            
-            map<json> routeFilter = {"routeId": request.routeId, "isActive": true};
-            stream<Route, error?> routeStream = check routes->find(routeFilter);
-            Route[] routeResults = check from Route r in routeStream select r;
-
-            if routeResults.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Route not found or inactive",
-                        routeId: request.routeId
-                    }
-                };
-            }
-
-            
-            if request.totalSeats <= 0 {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Total seats must be greater than 0"
-                    }
-                };
-            }
-
-            
-            if request.baseFare <= 0 {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Base fare must be greater than 0"
-                    }
-                };
-            }
-
-            
-            time:Utc departTime = check time:utcFromString(request.departureTime);
-            time:Utc arriveTime = check time:utcFromString(request.arrivalTime);
-
-            
-            if time:utcDiffSeconds(arriveTime, departTime) <= 0.0d {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Arrival time must be after departure time"
-                    }
-                };
-            }
-
-            string tripId = uuid:createType1AsString();
-            time:Utc now = time:utcNow();
-
-            Trip newTrip = {
-                tripId: tripId,
-                routeId: request.routeId,
-                departureTime: departTime,
-                arrivalTime: arriveTime,
-                status: "SCHEDULED",
-                availableSeats: request.totalSeats,
-                totalSeats: request.totalSeats,
-                baseFare: request.baseFare,
-                createdAt: now,
-                updatedAt: now
-            };
-
-            check trips->insertOne(newTrip);
-
-            log:printInfo(string `Trip created: ${tripId} for route ${request.routeId}`);
-
-            return <http:Created>{
-                headers: {
-                    "Location": string `/api/transport/trips/${tripId}`
-                },
-                body: {
-                    message: "Trip created successfully",
-                    tripId: tripId,
-                    routeId: request.routeId
-                }
-            };
-
-        } on fail var e {
-            log:printError("Failed to create trip", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to create trip",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    
-    resource function get trips(string? routeId = (), string? status = ()) returns TripResponse[]|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-
-            map<json> filter = {};
-
-            if routeId is string {
-                filter["routeId"] = routeId;
-            }
-
-            if status is string {
-                
-                string[] validStatuses = ["SCHEDULED", "ACTIVE", "COMPLETED", "CANCELLED", "DELAYED"];
-                if validStatuses.indexOf(status) is int {
-                    filter["status"] = status;
-                }
-            }
-
-            stream<Trip, error?> tripStream = check trips->find(filter);
-            TripResponse[] tripResponses = [];
-
-            check from Trip trip in tripStream
-                do {
-                    tripResponses.push({
-                        tripId: trip.tripId,
-                        routeId: trip.routeId,
-                        departureTime: time:utcToString(trip.departureTime),
-                        arrivalTime: time:utcToString(trip.arrivalTime),
-                        status: trip.status,
-                        availableSeats: trip.availableSeats,
-                        totalSeats: trip.totalSeats,
-                        baseFare: trip.baseFare,
-                        createdAt: time:utcToString(trip.createdAt),
-                        routeInfo: ()
-                    });
-                };
-
-            log:printInfo(string `Retrieved ${tripResponses.length()} trips`);
-
-            return tripResponses;
-
-        } on fail var e {
-            log:printError("Failed to get trips", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve trips",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    
-    resource function get trips/[string tripId]() returns TripResponse|http:NotFound|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-            mongodb:Collection routes = check db->getCollection("routes");
-
-            map<json> filter = {"tripId": tripId};
-            stream<Trip, error?> tripStream = check trips->find(filter);
-            Trip[] results = check from Trip t in tripStream select t;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Trip not found",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            Trip trip = results[0];
-
-            
-            map<json> routeFilter = {"routeId": trip.routeId};
-            stream<Route, error?> routeStream = check routes->find(routeFilter);
-            Route[] routeResults = check from Route r in routeStream select r;
-
-            RouteInfo? routeInfo = ();
-            if routeResults.length() > 0 {
-                Route route = routeResults[0];
-                routeInfo = {
-                    routeName: route.routeName,
-                    vehicleType: route.vehicleType,
-                    startLocation: route.startLocation,
-                    endLocation: route.endLocation,
-                    stops: route.stops
-                };
-            }
-
-            return {
-                tripId: trip.tripId,
-                routeId: trip.routeId,
-                departureTime: time:utcToString(trip.departureTime),
-                arrivalTime: time:utcToString(trip.arrivalTime),
-                status: trip.status,
-                availableSeats: trip.availableSeats,
-                totalSeats: trip.totalSeats,
-                baseFare: trip.baseFare,
-                createdAt: time:utcToString(trip.createdAt),
-                routeInfo: routeInfo
-            };
-
-        } on fail var e {
-            log:printError("Failed to get trip", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to retrieve trip",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    
-    resource function put trips/[string tripId]/status(UpdateTripStatusRequest request) returns http:Ok|http:BadRequest|http:NotFound|http:InternalServerError {
-        do {
-            string newStatus = request.status;
-
-            
-            string[] validStatuses = ["SCHEDULED", "ACTIVE", "COMPLETED", "CANCELLED", "DELAYED"];
-            if validStatuses.indexOf(newStatus) is () {
-                return <http:BadRequest>{
-                    body: {
-                        message: string `Invalid status. Must be one of: ${string:'join(", ", ...validStatuses)}`
-                    }
-                };
-            }
-
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-
-            
-            map<json> filter = {"tripId": tripId};
-            stream<Trip, error?> tripStream = check trips->find(filter);
-            Trip[] results = check from Trip t in tripStream select t;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Trip not found",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            Trip existingTrip = results[0];
-            string oldStatus = existingTrip.status;
-
-            
-            mongodb:Update update = {
-                "$set": {
-                    "status": newStatus,
-                    "updatedAt": time:utcNow()
-                }
-            };
-
-            mongodb:UpdateResult updateResult = check trips->updateOne(filter, update);
-
-            if updateResult.modifiedCount == 0 {
-                return <http:Ok>{
-                    body: {
-                        message: "No changes made - status already set",
-                        tripId: tripId,
-                        currentStatus: oldStatus
-                    }
-                };
-            }
-
-            
-            string eventType = "TRIP_STATUS_CHANGED";
-            if newStatus == "CANCELLED" {
-                eventType = "TRIP_CANCELLED";
-            } else if newStatus == "DELAYED" {
-                eventType = "TRIP_DELAYED";
-            } else if newStatus == "SCHEDULED" {
-                eventType = "TRIP_RESCHEDULED";
-            }
-
-            
-            ScheduleUpdateEvent event = {
-                eventId: uuid:createType1AsString(),
-                eventType: eventType,
-                tripId: tripId,
-                routeId: existingTrip.routeId,
-                message: request.reason ?: string `Trip status changed from ${oldStatus} to ${newStatus}`,
-                timestamp: time:utcToString(time:utcNow())
-            };
-
-            error? sendResult = kafkaProducer->send({
-                topic: "schedule.updates",
-                value: event.toJsonString()
-            });
-
-            if sendResult is error {
-                log:printError("Failed to publish schedule update event", 'error = sendResult);
-            } else {
-                log:printInfo(string `Schedule update event published for trip ${tripId}`);
-            }
-
-            log:printInfo(string `Trip ${tripId} status updated: ${oldStatus} -> ${newStatus}`);
-
-            return <http:Ok>{
-                body: {
-                    message: "Trip status updated successfully",
-                    tripId: tripId,
-                    previousStatus: oldStatus,
-                    currentStatus: newStatus,
-                    eventPublished: sendResult is ()
-                }
-            };
-
-        } on fail var e {
-            log:printError("Failed to update trip status", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to update trip status",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    
-    resource function post trips/[string tripId]/reserve() returns http:Ok|http:BadRequest|http:NotFound|http:Conflict|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-
-            map<json> filter = {"tripId": tripId};
-            stream<Trip, error?> tripStream = check trips->find(filter);
-            Trip[] results = check from Trip t in tripStream select t;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Trip not found",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            Trip trip = results[0];
-
-            
-            if trip.status != "SCHEDULED" {
-                return <http:BadRequest>{
-                    body: {
-                        message: string `Cannot reserve seat. Trip status is ${trip.status}`,
-                        tripId: tripId
-                    }
-                };
-            }
-
-            
-            if trip.availableSeats <= 0 {
-                return <http:Conflict>{
-                    body: {
-                        message: "No seats available",
-                        tripId: tripId,
-                        availableSeats: 0
-                    }
-                };
-            }
-
-            // Atomically decrement available
-            int newAvailableSeats = trip.availableSeats - 1;
-            mongodb:Update update = {
-                "$set": {
-                    "availableSeats": newAvailableSeats,
-                    "updatedAt": time:utcNow()
-                }
-            };
-
-            
-            map<json> atomicFilter = {"tripId": tripId, "availableSeats": trip.availableSeats};
-            mongodb:UpdateResult result = check trips->updateOne(atomicFilter, update);
-
-            if result.modifiedCount == 0 {
-                
-                return <http:Conflict>{
-                    body: {
-                        message: "Seat reservation failed due to concurrent request",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            log:printInfo(string `Seat reserved for trip ${tripId}. Remaining: ${newAvailableSeats}`);
-
-            return <http:Ok>{
-                body: {
-                    message: "Seat reserved successfully",
-                    tripId: tripId,
-                    availableSeats: newAvailableSeats,
-                    totalSeats: trip.totalSeats
-                }
-            };
-
-        } on fail var e {
-            log:printError("Failed to reserve seat", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to reserve seat",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
-
-    
-    resource function post trips/[string tripId]/release() returns http:Ok|http:BadRequest|http:NotFound|http:InternalServerError {
-        do {
-            mongodb:Database db = check mongoClient->getDatabase(mongoDatabase);
-            mongodb:Collection trips = check db->getCollection("trips");
-
-            map<json> filter = {"tripId": tripId};
-            stream<Trip, error?> tripStream = check trips->find(filter);
-            Trip[] results = check from Trip t in tripStream select t;
-
-            if results.length() == 0 {
-                return <http:NotFound>{
-                    body: {
-                        message: "Trip not found",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            Trip trip = results[0];
-
-            
-            if trip.availableSeats >= trip.totalSeats {
-                return <http:BadRequest>{
-                    body: {
-                        message: "Cannot release seat. All seats are already available",
-                        tripId: tripId
-                    }
-                };
-            }
-
-            int newAvailableSeats = trip.availableSeats + 1;
-            mongodb:Update update = {
-                "$set": {
-                    "availableSeats": newAvailableSeats,
-                    "updatedAt": time:utcNow()
-                }
-            };
-
-            mongodb:UpdateResult result = check trips->updateOne(filter, update);
-
-            log:printInfo(string `Seat released for trip ${tripId}. Available: ${newAvailableSeats}`);
-
-            return <http:Ok>{
-                body: {
-                    message: "Seat released successfully",
-                    tripId: tripId,
-                    availableSeats: newAvailableSeats,
-                    totalSeats: trip.totalSeats
-                }
-            };
-
-        } on fail var e {
-            log:printError("Failed to release seat", 'error = e);
-            return <http:InternalServerError>{
-                body: {
-                    message: "Failed to release seat",
-                    ei_code: e.message()
-                }
-            };
-        }
-    }
+}
+
+// Main function
+public function main() returns error? {
+    check initDatabase();
+    log:printInfo("Transport Service started on port 9091");
 }
